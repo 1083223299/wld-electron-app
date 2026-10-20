@@ -1,0 +1,54 @@
+:root {
+  --primary: #6a35ff;
+  --primary-hover: #8f5eff;
+  --primary-active: #4d23d9;
+  --primary-tint: #e7deff;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --text-main: #1d2129;
+  --text-sub: #8a94a6;
+  --border: #e8ecf3;
+  --bg-page: #f4f9fd;
+  --bg-card: #ffffff;
+  --sidebar-bg: #ffffff;
+  --sidebar-text: #1d2129;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+html,
+body {
+  background: transparent;
+}
+
+#app {
+  background: var(--bg-page);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+body {
+  overflow: hidden;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}

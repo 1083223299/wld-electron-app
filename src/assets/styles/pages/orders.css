@@ -1,0 +1,30 @@
+.order-no { font-family: Consolas, monospace; color: var(--primary); }
+
+.filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.filter-tabs button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-main);
+}
+.filter-tabs button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-invert);
+}
+
+.order-detail dl {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 8px 12px;
+  font-size: 13px;
+}
+.order-detail dt { color: var(--text-sub); }

@@ -1,0 +1,16 @@
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.toolbar-left { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+.avatar-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.avatar-cell img { width: 28px; height: 28px; border-radius: 50%; }

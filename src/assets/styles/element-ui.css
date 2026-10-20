@@ -1,0 +1,435 @@
+/* ============================================================
+ * Element Plus 主题接入（跟随换肤）
+ * 通过覆盖 --el-* 设计令牌 + 组件级微调，让所有 el 组件
+ * （按钮/表格/弹窗/下拉/表单/消息等）自动跟随当前主题。
+ * ============================================================ */
+
+:root {
+  /* 主色系映射 */
+  --el-color-primary: var(--primary);
+  --el-color-primary-light-3: var(--primary-light-3);
+  --el-color-primary-light-5: var(--primary-light-5);
+  --el-color-primary-light-7: var(--primary-light-7);
+  --el-color-primary-light-8: var(--primary-light-8);
+  --el-color-primary-light-9: var(--primary-tint);
+  --el-color-primary-dark-2: var(--primary-active);
+
+  /* 语义色 */
+  --el-color-success: #22c55e;
+  --el-color-warning: #f59e0b;
+  --el-color-danger: #ef4444;
+  --el-color-error: #ef4444;
+
+  /* 表面 */
+  --el-bg-color: var(--bg-card);
+  --el-bg-color-page: var(--bg-page);
+  --el-bg-color-overlay: var(--bg-elevated);
+  --el-fill-color: var(--bg-hover);
+  --el-fill-color-light: var(--bg-hover);
+  --el-fill-color-lighter: var(--bg-stripe);
+  --el-fill-color-extra-light: var(--bg-stripe);
+  --el-fill-color-dark: var(--border);
+  --el-fill-color-blank: var(--bg-card);
+
+  /* 边框 */
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border-soft);
+  --el-border-color-lighter: var(--border-faint);
+  --el-border-color-extra-light: var(--border-faint);
+  --el-border-color-dark: var(--border-strong);
+
+  /* 文字 */
+  --el-text-color-primary: var(--text-main);
+  --el-text-color-regular: var(--text-main);
+  --el-text-color-secondary: var(--text-sub);
+  --el-text-color-placeholder: var(--text-faint);
+  --el-text-color-disabled: var(--text-faint);
+
+  /* 表格 */
+  --el-table-bg-color: var(--bg-card);
+  --el-table-tr-bg-color: var(--bg-card);
+  --el-table-header-bg-color: var(--thead-color);
+  --el-table-header-text-color: var(--text-main);
+  --el-table-row-hover-bg-color: var(--bg-hover);
+  --el-table-border-color: var(--border-faint);
+
+  /* 其他 */
+  --el-mask-color: rgba(0, 0, 0, 0.45);
+  --el-border-radius-base: var(--radius);
+  --el-box-shadow-light: 0 12px 32px rgba(0, 0, 0, 0.12);
+
+  /* 表单控件（EP 2.14 wrapper 结构令牌） */
+  --el-input-bg-color: var(--input-bg);
+  --el-input-border-color: var(--input-border);
+  --el-input-hover-border-color: var(--input-border-hover);
+  --el-input-focus-border-color: var(--primary);
+  --el-input-text-color: var(--text-main);
+  --el-input-placeholder-color: var(--input-placeholder);
+  --el-input-icon-color: var(--text-sub);
+  --el-input-disabled-bg-color: var(--bg-hover);
+  --el-checkbox-input-border-color: var(--control-border);
+  --el-checkbox-input-border-color-hover: var(--input-border-hover);
+  --el-radio-input-border-color: var(--control-border);
+  --el-radio-input-border-color-hover: var(--input-border-hover);
+}
+
+.el-breadcrumb__inner,
+.el-breadcrumb__inner a {
+  font-weight: 400 !important;
+}
+
+.el-upload input[type='file'] {
+  display: none !important;
+}
+
+.el-upload__input {
+  display: none;
+}
+
+.el-tag.el-tag--success {
+  color: #1bc286;
+}
+
+.el-tag.el-tag--warning {
+  color: #ff8107;
+}
+
+.el-dialog {
+  transform: none;
+  left: 0;
+  position: relative;
+  margin: 0 auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  background: var(--bg-elevated);
+}
+
+.el-overlay {
+  background-color: var(--el-mask-color);
+}
+
+.el-message-box {
+  border-radius: 14px;
+  border: 1px solid var(--border-soft);
+}
+
+.el-input__inner:hover {
+  border-color: var(--primary-hover);
+}
+
+.el-input__inner:focus,
+.el-select .el-input.is-focus .el-input__inner,
+.el-range-editor.is-active,
+.el-range-editor.is-active:hover {
+  border-color: var(--primary-active);
+}
+
+.el-button--default:hover {
+  background-color: var(--primary-tint) !important;
+  border-color: var(--primary-tint) !important;
+  color: var(--primary-hover) !important;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--primary);
+  --el-button-border-color: var(--primary);
+  --el-button-hover-bg-color: var(--primary-hover);
+  --el-button-hover-border-color: var(--primary-hover);
+  --el-button-active-bg-color: var(--primary-active);
+  --el-button-active-border-color: var(--primary-active);
+  --el-button-text-color: var(--text-invert);
+  --el-button-hover-text-color: var(--text-invert);
+  --el-button-active-text-color: var(--text-invert);
+  --el-button-disabled-bg-color: var(--primary-disabled);
+  --el-button-disabled-border-color: var(--primary-disabled);
+  --el-button-disabled-text-color: var(--text-invert);
+  background: var(--primary);
+  border-color: var(--primary);
+  border-radius: var(--radius);
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus,
+.el-button--primary:active {
+  background: var(--primary-hover) !important;
+  border-color: var(--primary-hover) !important;
+  color: var(--text-invert) !important;
+}
+
+.el-button--primary.is-disabled {
+  background: var(--primary-disabled) !important;
+  border-color: var(--primary-disabled) !important;
+  color: var(--text-invert) !important;
+}
+
+.el-select-dropdown__item.hover,
+.el-select-dropdown__item:hover {
+  background-color: var(--primary-tint);
+  color: var(--text-main);
+}
+
+.el-select-dropdown__item.selected {
+  color: var(--primary-hover);
+}
+
+.el-radio__input.is-checked + .el-radio__label {
+  color: var(--primary);
+}
+
+.el-radio__input.is-checked .el-radio__inner {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.el-radio__inner {
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.el-radio__inner::after {
+  background: #fff;
+}
+
+.el-radio__inner:hover,
+.el-checkbox__inner:hover {
+  border-color: var(--primary-hover);
+}
+
+.el-checkbox__input.is-checked + .el-checkbox__label {
+  color: var(--primary);
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-checkbox__input.is-indeterminate .el-checkbox__inner {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.el-checkbox__inner {
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+  border-radius: 4px;
+}
+
+.el-checkbox__inner::after {
+  border-color: #fff;
+}
+
+.el-pager li {
+  min-width: 28px;
+  line-height: 28px;
+}
+
+.el-pager li.active {
+  color: var(--text-main);
+  border: 1px solid var(--text-main);
+  border-radius: 6px;
+  line-height: 26px;
+}
+
+.el-pager li:hover {
+  color: var(--primary-hover) !important;
+}
+
+.el-date-table td.today span {
+  color: var(--primary-hover);
+  font-weight: 700;
+}
+
+.el-picker-panel__shortcut:hover,
+.el-picker-panel__icon-btn:hover,
+.el-breadcrumb__inner a:hover {
+  color: var(--primary-hover);
+}
+
+.el-date-table td.end-date span,
+.el-date-table td.start-date span {
+  background-color: var(--primary-hover);
+}
+
+.el-message--success,
+.el-message--warning,
+.el-message--error {
+  background-color: var(--bg-elevated) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-soft);
+}
+
+.el-message--success .el-message__content,
+.el-message--warning .el-message__content,
+.el-message--error .el-message__content,
+.el-message-box__content {
+  color: var(--text-main) !important;
+}
+
+.el-message .el-icon-success {
+  color: #1bc286 !important;
+}
+
+.el-message .el-icon-warning {
+  color: #ff8107 !important;
+}
+
+.el-message .el-icon-error {
+  color: #ff4d4f !important;
+}
+
+.el-table thead th {
+  background-color: var(--thead-color);
+  color: var(--text-main);
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: var(--bg-stripe);
+}
+
+.el-table .el-table__cell {
+  padding: 9px 0;
+}
+
+.el-input__inner,
+.el-select .el-input__inner,
+.el-date-editor .el-input__inner {
+  border-radius: var(--radius) !important;
+}
+
+.el-form-item__label {
+  text-align: left;
+  font-weight: normal;
+  color: var(--text-main) !important;
+}
+
+.el-table__empty-text {
+  width: 100%;
+  height: 120px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  color: var(--text-sub);
+  line-height: 446px;
+}
+
+.el-input__wrapper,
+.el-input__inner,
+.el-select__wrapper {
+  border-radius: var(--radius) !important;
+  height: 40px !important;
+  line-height: 40px !important;
+}
+
+.radio-item input,
+.checkbox-item input {
+  width: auto !important;
+}
+
+.el-popper.is-light,
+.el-dropdown__popper.el-popper {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+/* ============================================================
+ * 表单控件优化（适配 Element Plus 2.14 wrapper 结构）
+ * 输入框 / 选择器 / 文本域 / 下拉面板 / 勾选控件统一走令牌，
+ * 暗色主题下边框提亮、焦点金色光晕，亮色主题保持原观感。
+ * ============================================================ */
+
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner,
+.el-input-number .el-input__wrapper {
+  box-shadow: 0 0 0 1px var(--input-border) inset !important;
+  background-color: var(--input-bg) !important;
+  transition: box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover,
+.el-textarea__inner:hover,
+.el-input-number .el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--input-border-hover) inset !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-input.is-focus .el-input__wrapper,
+.el-input-number.is-focus .el-input__wrapper {
+  box-shadow: 0 0 0 1px var(--primary) inset, 0 0 0 3px var(--input-focus-ring) !important;
+  background-color: var(--input-bg-focus) !important;
+}
+
+/* 勾选框 / 单选框未选中态：边框在暗色下清晰可见（用 :not(.is-checked) 避免压制选中填充） */
+.el-checkbox__input:not(.is-checked) .el-checkbox__inner,
+.el-radio__input:not(.is-checked) .el-radio__inner {
+  border-color: var(--control-border) !important;
+  background-color: var(--input-bg) !important;
+}
+
+.el-checkbox__input:not(.is-checked):hover .el-checkbox__inner,
+.el-checkbox__input:not(.is-checked).is-focus .el-checkbox__inner,
+.el-radio__input:not(.is-checked):hover .el-radio__inner,
+.el-radio__input:not(.is-checked).is-focus .el-radio__inner {
+  border-color: var(--input-border-hover) !important;
+}
+
+/* 下拉面板 / 日期面板：暗色下浮层与边框协调 */
+.el-select-dropdown,
+.el-picker-panel {
+  border: 1px solid var(--border-soft);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.el-select-dropdown__item {
+  border-radius: 6px;
+}
+
+.el-select-dropdown__item.hover,
+.el-select-dropdown__item:hover {
+  background-color: var(--primary-tint);
+  color: var(--text-main);
+}
+
+.el-select-dropdown__item.selected {
+  color: var(--primary);
+  font-weight: 600;
+  background-color: var(--primary-tint);
+}
+
+.el-select-dropdown__item.selected.hover,
+.el-select-dropdown__item.selected:hover {
+  background-color: var(--primary-faint);
+}
+
+/* 输入框内图标（密码可见切换 / 下拉箭头等）暗色下更清晰 */
+.el-input__suffix-inner .el-icon,
+.el-select__caret {
+  color: var(--text-sub);
+  transition: color 0.2s ease;
+}
+
+/* 占位文字：EP 组件作用域默认变量会盖掉 :root 映射，这里直接强制定位 */
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder,
+.el-select__placeholder,
+.el-input-number .el-input__inner::placeholder {
+  color: var(--input-placeholder) !important;
+}
+
+.el-input__wrapper.is-focus .el-input__suffix-inner .el-icon,
+.el-select__wrapper.is-focused .el-select__caret {
+  color: var(--primary-hover);
+}
+
+/* 日期选择器面板内 hover / 今日 / 选中项 */
+.el-date-table td.available:hover span {
+  background-color: var(--primary-tint);
+  color: var(--text-main);
+}
+
+.el-picker-panel__footer,
+.el-date-picker__header {
+  border-color: var(--border-soft);
+}
+
+.el-date-range-picker__content.is-left,
+.el-date-range-picker__content.is-right {
+  border-color: var(--border-soft);
+}

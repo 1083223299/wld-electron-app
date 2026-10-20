@@ -1,0 +1,72 @@
+# ============================================================
+# 在 GitHub 的免费 macOS 服务器上自动打包 Mac 版
+# 使用前提：把项目推到 GitHub（公共仓库的 macOS runner 免费）
+#
+# 触发方式：
+#  1. 手动触发：GitHub 仓库页 → Actions → "Build macOS" → Run workflow
+#  2. 打 tag 触发：git tag v1.0.1 && git push origin v1.0.1（适合正式发版）
+#
+# 产物：release/ 下的 .dmg、-mac.zip、latest-mac.yml
+#       在 Actions 运行结果页的 Artifacts 里下载
+# ============================================================
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 没有 Apple 证书时 electron-builder 会做 ad-hoc 签名，能正常出包，
+      # 但打出来的包不能正式分发（别的 Mac 打开会被 Gatekeeper 拦）。
+      # 正式发布时：在仓库 Settings → Secrets and variables → Actions 里配置
+      #   CSC_LINK                      （Developer ID 证书，p12 的 base64）
+      #   CSC_KEY_PASSWORD              （证书密码）
+      #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID（公证用）
+      # 配置后 electron-builder 会自动签名+公证。
+      - name: Build macOS package
+        run: npm run dist:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-release
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
+          if-no-files-found: error
+
+      # ---------- 可选：自动上传阿里云 OSS ----------
+      # 需要先在仓库 Settings → Secrets 配置：
+      #   OSS_AK（AccessKey ID）、OSS_SK（AccessKey Secret）、OSS_BUCKET、OSS_DIR（如 esports-updata）
+      # 取消下面整段的注释即可启用（tag 触发时自动上传到 OSS）
+      # - name: Upload to Aliyun OSS
+      #   if: github.event_name == 'push'
+      #   env:
+      #     OSS_AK: ${{ secrets.OSS_AK }}
+      #     OSS_SK: ${{ secrets.OSS_SK }}
+      #     OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+      #     OSS_DIR: ${{ secrets.OSS_DIR }}
+      #   run: |
+      #     curl -L -o ossutil "https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-darwin-amd64.zip"
+      #     unzip -o ossutil -d ossutil-bin
+      #     chmod +x ossutil-bin/ossutil
+      #     ./ossutil-bin/ossutil config -e oss-cn-beijing.aliyuncs.com -i "${{ secrets.OSS_AK }}" -k "${{ secrets.OSS_SK }}"
+      #     ./ossutil-bin/ossutil cp release/ oss://${{ secrets.OSS_BUCKET }}/${{ secrets.OSS_DIR }}/ -r -f --include "*.dmg" --include "*.zip" --include "latest-mac.yml" --include "latest.yml" --include "*.blockmap"

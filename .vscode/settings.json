@@ -1,0 +1,19 @@
+{
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/release/**": true,
+    "**/staging-release/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/release": true,
+    "**/staging-release": true
+  },
+  "files.exclude": {
+    "**/dist": true,
+    "**/release": true,
+    "**/staging-release": true
+  }
+}

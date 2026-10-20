@@ -1,0 +1,474 @@
+/* ============================================================
+ * 主题令牌系统（换肤核心）
+ * 通过 <html data-theme="xxx"> 切换整套视觉变量
+ * 主题列表：
+ *   aurora    紫夜星云（默认）
+ *   ocean     深海科技蓝
+ *   emerald   翡翠流光
+ *   rose      绯红烈焰
+ *   nightgold 暗夜黑金（暗色）
+ * 说明：兼容 Electron 23（Chromium 110），仅使用 hex / rgba，
+ *       不使用 color-mix / light-dark / oklch。
+ * ============================================================ */
+
+/* ---------- 默认主题 · 紫夜星云（保持原视觉） ---------- */
+:root {
+  /* 品牌色 */
+  --primary: #6a35ff;
+  --primary-hover: #8f5eff;
+  --primary-active: #4d23d9;
+  --primary-deep: #7b5cff;
+  --primary-tint: #e7deff;
+  --primary-soft: rgba(106, 53, 255, 0.08);
+  --primary-faint: rgba(106, 53, 255, 0.1);
+  --primary-ring: rgba(106, 53, 255, 0.15);
+  --primary-disabled: #c1a8fd;
+  --primary-light-3: #8f5eff;
+  --primary-light-5: #b6a3ff;
+  --primary-light-7: #d9ceff;
+  --primary-light-8: #e7deff;
+  --primary-glow: rgba(106, 53, 255, 0.18);
+  --primary-glow-strong: rgba(106, 53, 255, 0.24);
+  --primary-border: rgba(106, 53, 255, 0.12);
+  --primary-border-strong: rgba(106, 53, 255, 0.35);
+  --icon-invert: 1;
+  --icon-filter: none;
+
+  /* 表面 */
+  --bg-page: #f4f9fd;
+  --bg-app: #f4f9fd;
+  --bg-card: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-topbar: rgba(255, 255, 255, 0.78);
+  --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 255, 0.96));
+  --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 248, 255, 0.9));
+  --bg-thead: linear-gradient(180deg, #f8f9ff 0%, #f2f4fb 100%);
+  --bg-hover: #f7f5ff;
+  --bg-stripe: rgba(246, 248, 255, 0.5);
+  --bg-table-body: rgba(255, 255, 255, 0.35);
+  --thead-color: #f6f6fb;
+  --row-hover: linear-gradient(90deg, rgba(106, 53, 255, 0.06), rgba(143, 94, 255, 0.03));
+  --panel-glass: rgba(255, 255, 255, 0.92);
+
+  /* 侧边栏 */
+  --sidebar-bg-1: #fbfcff;
+  --sidebar-bg-2: #f4f7ff;
+  --sidebar-inset: inset -1px 0 0 rgba(255, 255, 255, 0.6);
+  --sidebar-group-bg: rgba(255, 255, 255, 0.35);
+
+  /* 文字 */
+  --text-main: #1d2129;
+  --text-sub: #8a94a6;
+  --text-faint: #c0c4cc;
+  --text-invert: #ffffff;
+  --text-sidebar: #2a3043;
+  --text-submenu: #4d5878;
+
+  /* 边框 */
+  --border: #e8ecf3;
+  --border-soft: rgba(136, 146, 175, 0.15);
+  --border-faint: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(127, 139, 170, 0.18);
+
+  /* 阴影 */
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 18px 32px rgba(30, 41, 59, 0.18);
+  --panel-shadow: 0 12px 28px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --app-frame-border: #8100eb28;
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgba(120, 130, 160, 0.35);
+  --scrollbar-track: transparent;
+
+  /* 品牌插图协调色（登录页背景 / 首页插画） */
+  --login-g1: #fbc2eb;
+  --login-g2: #a6c1ee;
+  --login-tint: linear-gradient(135deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 100%);
+
+  /* 表单控件（输入框 / 下拉 / 勾选框） */
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #e8ecf3;
+  --input-border-hover: rgba(106, 53, 255, 0.35);
+  --input-focus-ring: rgba(106, 53, 255, 0.14);
+  --input-placeholder: #b4bcc9;
+  --control-border: #b9c2d0;
+  --warning-text: #7a5b00;
+}
+
+/* ---------- 深海科技蓝 ---------- */
+[data-theme='ocean'] {
+  --primary: #2563eb;
+  --primary-hover: #3b82f6;
+  --primary-active: #1d4ed8;
+  --primary-deep: #1e40af;
+  --primary-tint: #dbeafe;
+  --primary-soft: rgba(37, 99, 235, 0.08);
+  --primary-faint: rgba(37, 99, 235, 0.1);
+  --primary-ring: rgba(37, 99, 235, 0.15);
+  --primary-disabled: #9dbcf9;
+  --primary-light-3: #3b82f6;
+  --primary-light-5: #60a5fa;
+  --primary-light-7: #93c5fd;
+  --primary-light-8: #bfdbfe;
+  --primary-glow: rgba(37, 99, 235, 0.18);
+  --primary-glow-strong: rgba(37, 99, 235, 0.25);
+  --primary-border: rgba(37, 99, 235, 0.12);
+  --primary-border-strong: rgba(37, 99, 235, 0.35);
+  --icon-invert: 1;
+  --icon-filter: none;
+
+  --bg-page: #eef4fb;
+  --bg-app: #eef4fb;
+  --bg-card: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-topbar: rgba(255, 255, 255, 0.8);
+  --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 253, 0.96));
+  --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 246, 253, 0.92));
+  --bg-thead: linear-gradient(180deg, #f2f7fd 0%, #e9f1fb 100%);
+  --bg-hover: #eef4fd;
+  --bg-stripe: rgba(239, 246, 255, 0.55);
+  --bg-table-body: rgba(255, 255, 255, 0.35);
+  --thead-color: #eef4fc;
+  --row-hover: linear-gradient(90deg, rgba(37, 99, 235, 0.06), rgba(96, 165, 250, 0.03));
+  --panel-glass: rgba(255, 255, 255, 0.92);
+
+  --sidebar-bg-1: #f6faff;
+  --sidebar-bg-2: #eaf2fd;
+  --sidebar-inset: inset -1px 0 0 rgba(255, 255, 255, 0.6);
+  --sidebar-group-bg: rgba(255, 255, 255, 0.4);
+
+  --text-main: #17233b;
+  --text-sub: #7c8ba5;
+  --text-faint: #b6c2d6;
+  --text-invert: #ffffff;
+  --text-sidebar: #16324f;
+  --text-submenu: #47617f;
+
+  --border: #e2eaf4;
+  --border-soft: rgba(100, 130, 170, 0.15);
+  --border-faint: rgba(120, 150, 190, 0.15);
+  --border-strong: rgba(110, 140, 180, 0.2);
+
+  --shadow: 0 1px 3px rgba(15, 40, 80, 0.08);
+  --shadow-lg: 0 18px 32px rgba(15, 40, 80, 0.18);
+  --panel-shadow: 0 12px 28px rgba(15, 40, 80, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --app-frame-border: rgba(37, 99, 235, 0.16);
+
+  --scrollbar-thumb: rgba(96, 120, 160, 0.35);
+
+  --login-g1: #cfe4ff;
+  --login-g2: #8fb8f6;
+  --login-tint: linear-gradient(135deg, rgba(59, 130, 246, 0.38) 0%, rgba(96, 165, 250, 0.26) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(37, 99, 235, 0.05) 100%);
+
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #dde6f2;
+  --input-border-hover: rgba(37, 99, 235, 0.4);
+  --input-focus-ring: rgba(37, 99, 235, 0.15);
+  --input-placeholder: #9fadc0;
+  --control-border: #a9b9cf;
+}
+
+/* ---------- 翡翠流光 ---------- */
+[data-theme='emerald'] {
+  --primary: #0d9488;
+  --primary-hover: #14b8a6;
+  --primary-active: #0f766e;
+  --primary-deep: #115e59;
+  --primary-tint: #ccfbf1;
+  --primary-soft: rgba(13, 148, 136, 0.08);
+  --primary-faint: rgba(13, 148, 136, 0.1);
+  --primary-ring: rgba(13, 148, 136, 0.15);
+  --primary-disabled: #7ddcd2;
+  --primary-light-3: #14b8a6;
+  --primary-light-5: #2dd4bf;
+  --primary-light-7: #5eead4;
+  --primary-light-8: #99f6e4;
+  --primary-glow: rgba(13, 148, 136, 0.18);
+  --primary-glow-strong: rgba(13, 148, 136, 0.24);
+  --primary-border: rgba(13, 148, 136, 0.12);
+  --primary-border-strong: rgba(13, 148, 136, 0.35);
+  --icon-invert: 1;
+  --icon-filter: none;
+
+  --bg-page: #effaf7;
+  --bg-app: #effaf7;
+  --bg-card: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-topbar: rgba(255, 255, 255, 0.82);
+  --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 251, 249, 0.96));
+  --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 249, 246, 0.92));
+  --bg-thead: linear-gradient(180deg, #f0faf7 0%, #e6f5f0 100%);
+  --bg-hover: #ecf8f4;
+  --bg-stripe: rgba(240, 250, 246, 0.55);
+  --bg-table-body: rgba(255, 255, 255, 0.35);
+  --thead-color: #edf8f4;
+  --row-hover: linear-gradient(90deg, rgba(13, 148, 136, 0.06), rgba(45, 212, 191, 0.03));
+  --panel-glass: rgba(255, 255, 255, 0.92);
+
+  --sidebar-bg-1: #f5fcfa;
+  --sidebar-bg-2: #e8f6f2;
+  --sidebar-inset: inset -1px 0 0 rgba(255, 255, 255, 0.6);
+  --sidebar-group-bg: rgba(255, 255, 255, 0.4);
+
+  --text-main: #14323a;
+  --text-sub: #6f8f8c;
+  --text-faint: #b3cdc8;
+  --text-invert: #ffffff;
+  --text-sidebar: #123c36;
+  --text-submenu: #3d615c;
+
+  --border: #d9ebe8;
+  --border-soft: rgba(90, 140, 132, 0.15);
+  --border-faint: rgba(90, 140, 132, 0.14);
+  --border-strong: rgba(90, 140, 132, 0.2);
+
+  --shadow: 0 1px 3px rgba(10, 70, 60, 0.08);
+  --shadow-lg: 0 18px 32px rgba(10, 70, 60, 0.18);
+  --panel-shadow: 0 12px 28px rgba(10, 70, 60, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --app-frame-border: rgba(13, 148, 136, 0.16);
+
+  --scrollbar-thumb: rgba(90, 140, 132, 0.35);
+
+  --login-g1: #d1f5ea;
+  --login-g2: #7fe3cf;
+  --login-tint: linear-gradient(135deg, rgba(20, 184, 166, 0.32) 0%, rgba(45, 212, 191, 0.22) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(13, 148, 136, 0.1) 0%, rgba(13, 148, 136, 0.05) 100%);
+
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #d7eae6;
+  --input-border-hover: rgba(13, 148, 136, 0.4);
+  --input-focus-ring: rgba(13, 148, 136, 0.15);
+  --input-placeholder: #93aaa6;
+  --control-border: #9ebdb6;
+}
+
+/* ---------- 绯红烈焰 ---------- */
+[data-theme='rose'] {
+  --primary: #e11d48;
+  --primary-hover: #f43f5e;
+  --primary-active: #be123c;
+  --primary-deep: #9f1239;
+  --primary-tint: #ffe4e6;
+  --primary-soft: rgba(225, 29, 72, 0.08);
+  --primary-faint: rgba(225, 29, 72, 0.1);
+  --primary-ring: rgba(225, 29, 72, 0.15);
+  --primary-disabled: #fda4af;
+  --primary-light-3: #f43f5e;
+  --primary-light-5: #fb7185;
+  --primary-light-7: #fda4af;
+  --primary-light-8: #fecdd3;
+  --primary-glow: rgba(225, 29, 72, 0.18);
+  --primary-glow-strong: rgba(225, 29, 72, 0.24);
+  --primary-border: rgba(225, 29, 72, 0.12);
+  --primary-border-strong: rgba(225, 29, 72, 0.35);
+  --icon-invert: 1;
+  --icon-filter: none;
+
+  --bg-page: #fdf2f4;
+  --bg-app: #fdf2f4;
+  --bg-card: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-topbar: rgba(255, 255, 255, 0.84);
+  --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(253, 247, 248, 0.96));
+  --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(252, 243, 245, 0.92));
+  --bg-thead: linear-gradient(180deg, #fdf2f4 0%, #f8e8ec 100%);
+  --bg-hover: #fdf0f2;
+  --bg-stripe: rgba(253, 242, 244, 0.55);
+  --bg-table-body: rgba(255, 255, 255, 0.35);
+  --thead-color: #f9eef1;
+  --row-hover: linear-gradient(90deg, rgba(225, 29, 72, 0.06), rgba(251, 113, 133, 0.03));
+  --panel-glass: rgba(255, 255, 255, 0.92);
+
+  --sidebar-bg-1: #fef7f8;
+  --sidebar-bg-2: #faecef;
+  --sidebar-inset: inset -1px 0 0 rgba(255, 255, 255, 0.6);
+  --sidebar-group-bg: rgba(255, 255, 255, 0.4);
+
+  --text-main: #3a1722;
+  --text-sub: #9a7080;
+  --text-faint: #c9a9b4;
+  --text-invert: #ffffff;
+  --text-sidebar: #4a1d2b;
+  --text-submenu: #7c4555;
+
+  --border: #f0dfe4;
+  --border-soft: rgba(170, 100, 120, 0.15);
+  --border-faint: rgba(170, 100, 120, 0.14);
+  --border-strong: rgba(170, 100, 120, 0.2);
+
+  --shadow: 0 1px 3px rgba(120, 30, 50, 0.08);
+  --shadow-lg: 0 18px 32px rgba(120, 30, 50, 0.18);
+  --panel-shadow: 0 12px 28px rgba(120, 30, 50, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --app-frame-border: rgba(225, 29, 72, 0.16);
+
+  --scrollbar-thumb: rgba(170, 100, 120, 0.35);
+
+  --login-g1: #ffe4e8;
+  --login-g2: #ffa9bc;
+  --login-tint: linear-gradient(135deg, rgba(244, 63, 94, 0.32) 0%, rgba(251, 113, 133, 0.22) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(225, 29, 72, 0.1) 0%, rgba(225, 29, 72, 0.05) 100%);
+
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #f0dde2;
+  --input-border-hover: rgba(225, 29, 72, 0.4);
+  --input-focus-ring: rgba(225, 29, 72, 0.15);
+  --input-placeholder: #b99aa6;
+  --control-border: #c9a6b2;
+}
+
+/* ---------- 暗夜黑金（暗色） ---------- */
+[data-theme='nightgold'] {
+  --primary: #d4a440;
+  --primary-hover: #e2b95e;
+  --primary-active: #b9892f;
+  --primary-deep: #c9973a;
+  --primary-tint: rgba(212, 164, 64, 0.16);
+  --primary-soft: rgba(212, 164, 64, 0.1);
+  --primary-faint: rgba(212, 164, 64, 0.14);
+  --primary-ring: rgba(212, 164, 64, 0.28);
+  --primary-disabled: rgba(212, 164, 64, 0.4);
+  --primary-light-3: #e2b95e;
+  --primary-light-5: #edcf8a;
+  --primary-light-7: #f6e4b8;
+  --primary-light-8: #faefd4;
+  --primary-glow: rgba(212, 164, 64, 0.22);
+  --primary-glow-strong: rgba(212, 164, 64, 0.3);
+  --primary-border: rgba(212, 164, 64, 0.18);
+  --primary-border-strong: rgba(212, 164, 64, 0.4);
+  --icon-invert: 0;
+  --icon-filter: brightness(0) invert(1);
+
+  --bg-page: #0b0d12;
+  --bg-app: #0b0d12;
+  --bg-card: #151922;
+  --bg-elevated: #1a1f2b;
+  --bg-topbar: rgba(13, 16, 23, 0.82);
+  --bg-panel: linear-gradient(180deg, rgba(21, 25, 34, 0.98), rgba(17, 20, 28, 0.96));
+  --bg-toolbar: linear-gradient(180deg, rgba(21, 25, 34, 0.9), rgba(16, 19, 26, 0.9));
+  --bg-thead: linear-gradient(180deg, #1c2130 0%, #181d29 100%);
+  --bg-hover: rgba(212, 164, 64, 0.07);
+  --bg-stripe: rgba(255, 255, 255, 0.02);
+  --bg-table-body: rgba(255, 255, 255, 0.02);
+  --thead-color: #1a1f2b;
+  --row-hover: linear-gradient(90deg, rgba(212, 164, 64, 0.08), rgba(226, 185, 94, 0.04));
+  --panel-glass: rgba(26, 31, 43, 0.92);
+
+  --sidebar-bg-1: #0e1117;
+  --sidebar-bg-2: #12151d;
+  --sidebar-inset: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  --sidebar-group-bg: rgba(255, 255, 255, 0.03);
+
+  --text-main: #e8e6df;
+  --text-sub: #8f97a8;
+  --text-faint: #5c6472;
+  --text-invert: #0b0d12;
+  --text-sidebar: #e8e6df;
+  --text-submenu: #9aa3b5;
+
+  --border: #262c3a;
+  --border-soft: rgba(255, 255, 255, 0.08);
+  --border-faint: rgba(255, 255, 255, 0.05);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 18px 32px rgba(0, 0, 0, 0.5);
+  --panel-shadow: 0 12px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --app-frame-border: rgba(212, 164, 64, 0.22);
+
+  --scrollbar-thumb: rgba(255, 255, 255, 0.16);
+
+  --login-g1: #221c0e;
+  --login-g2: #0d0a04;
+  --login-tint: linear-gradient(135deg, rgba(212, 164, 64, 0.22) 0%, rgba(11, 13, 18, 0.55) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(11, 13, 18, 0.22) 0%, rgba(21, 25, 34, 0.42) 100%);
+
+  /* 表单控件暗色适配：边框提亮、底色略高于卡片、焦点金色光晕 */
+  --input-bg: #1a1f2b;
+  --input-bg-focus: rgba(212, 164, 64, 0.05);
+  --input-border: rgba(255, 255, 255, 0.28);
+  --input-border-hover: rgba(212, 164, 64, 0.5);
+  --input-focus-ring: rgba(212, 164, 64, 0.2);
+  --input-placeholder: #b3bdcf;
+  --control-border: rgba(255, 255, 255, 0.42);
+  --warning-text: #e3b341;
+}
+
+/* ---------- 暗夜黑金：原生表单控件统一暗黑适配（公共层） ----------
+   覆盖各页面写死的浅色 input/textarea/select/label，让所有页面的
+   自定义表单在暗色主题下自动跟随令牌；亮色主题不受影响。
+   排除：EP 组件内部控件（el-input__inner / el-textarea__inner / el-select__input，
+   由 element-ui.css 单独处理）、勾选框/单选/文件选择与隐藏输入。 */
+[data-theme='nightgold']
+  :is(
+    input:not([type='checkbox']):not([type='radio']):not([type='file']):not([hidden]):not(.el-input__inner):not(.el-select__input):not(.el-range-input),
+    textarea:not(.el-textarea__inner),
+    select:not([class*='el-'])
+  ) {
+  background: var(--input-bg) !important;
+  border: 1px solid var(--input-border) !important;
+  color: var(--text-main) !important;
+  caret-color: var(--primary);
+}
+
+[data-theme='nightgold']
+  :is(
+    input:not([type='checkbox']):not([type='radio']):not([type='file']):not([hidden]):not(.el-input__inner):not(.el-select__input):not(.el-range-input),
+    textarea:not(.el-textarea__inner)
+  )::placeholder {
+  color: var(--input-placeholder) !important;
+}
+
+[data-theme='nightgold']
+  :is(
+    input:not([type='checkbox']):not([type='radio']):not([type='file']):not([hidden]):not(.el-input__inner):not(.el-select__input):not(.el-range-input),
+    textarea:not(.el-textarea__inner),
+    select:not([class*='el-'])
+  ):focus {
+  outline: none !important;
+  border-color: var(--primary) !important;
+  background: var(--input-bg-focus) !important;
+  box-shadow: 0 0 0 3px var(--input-focus-ring) !important;
+}
+
+/* 表单标签统一为次级文字色（排除按钮型 label 如上传按钮） */
+[data-theme='nightgold'] .form-row label:not(.upload-btn),
+[data-theme='nightgold'] .field-row label,
+[data-theme='nightgold'] .field-label,
+[data-theme='nightgold'] .form-label,
+[data-theme='nightgold'] .search-label,
+[data-theme='nightgold'] .status-label,
+[data-theme='nightgold'] .mode-label,
+[data-theme='nightgold'] .ratio-label,
+[data-theme='nightgold'] .spec-section > label {
+  color: var(--text-sub) !important;
+}
+
+/* ---------- 主题切换过渡动画（切换瞬间临时加类） ---------- */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: background-color 0.35s ease, color 0.35s ease, border-color 0.35s ease,
+    box-shadow 0.35s ease, fill 0.35s ease, opacity 0.35s ease !important;
+}
+
+/* ---------- 全局滚动条（跟随主题） ---------- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}

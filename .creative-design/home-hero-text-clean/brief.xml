@@ -1,0 +1,9 @@
+<item type="TEXT" path="/briefs/home-hero-text-clean" title="首页插画文字清理" brief="移除 Electron 管理后台首页插画顶部文字「欢迎进入未来洞管理系统」，保留其余画面与风格不变，输出无文字版本用于替换项目资源 src/assets/images/welcomeImage.png">
+  <size width="900" height="200"/>
+  <inline>
+    <contents>
+      <content>任务：移除首页插画顶部文字「欢迎进入未来洞管理系统」（画面顶部约 11%-17% 高度、中部约 32%-67% 宽度的白底区域），保留其余科技风 3D 电竞插画主体、构图、色彩、光影与背景完全不变，输出 1135x742 无文字版本。</content>
+    </contents>
+    <style font_size="14" font_family="sans-serif" font_weight="400" color="#1D2129" align="left" vertical_align="top"/>
+  </inline>
+</item>

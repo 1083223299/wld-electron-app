@@ -1,0 +1,107 @@
+{
+  "name": "my-electron-app",
+  "version": "1.0.0",
+  "description": "未来电竞一站式操作系统",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "dev:local": "cross-env VITE_APP_ENV=local node scripts/dev.js",
+    "dev:test": "cross-env VITE_APP_ENV=test node scripts/dev.js",
+    "build": "vite build",
+    "build:local": "cross-env VITE_APP_ENV=local vite build",
+    "build:dev": "cross-env VITE_APP_ENV=dev vite build",
+    "build:test": "cross-env VITE_APP_ENV=test vite build",
+    "build:staging": "cross-env VITE_APP_ENV=staging vite build",
+    "build:prod": "cross-env VITE_APP_ENV=prod vite build",
+    "start": "npm run build && electron .",
+    "start:local": "npm run build:local && electron .",
+    "start:dev": "npm run build:dev && electron .",
+    "start:test": "npm run build:test && electron .",
+    "start:staging": "npm run build:staging && electron .",
+    "start:prod": "npm run build:prod && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "pack:local": "npm run build:local && electron-builder --dir",
+    "pack:dev": "npm run build:dev && electron-builder --dir",
+    "pack:test": "npm run build:test && electron-builder --dir",
+    "pack:staging": "npm run build:staging && electron-builder --dir",
+    "pack:prod": "npm run build:prod && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "predist": "node scripts/check-release-lock.js",
+    "dist:local": "npm run build:local && electron-builder",
+    "predist:local": "node scripts/check-release-lock.js",
+    "dist:dev": "npm run build:dev && electron-builder",
+    "predist:dev": "node scripts/check-release-lock.js",
+    "dist:test": "npm run build:test && electron-builder",
+    "predist:test": "node scripts/check-release-lock.js",
+    "dist:staging": "npm run build:staging && electron-builder",
+    "predist:staging": "node scripts/check-release-lock.js",
+    "dist:prod": "npm run build:prod && electron-builder",
+    "predist:prod": "node scripts/check-release-lock.js",
+    "dist:mac": "npm run build:prod && electron-builder --mac",
+    "predist:mac": "node scripts/check-release-lock.js"
+  },
+  "author": "Jane Doe",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/publisher-github": "^7.11.2",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "cross-env": "^10.1.0",
+    "electron": "23.1.3",
+    "electron-builder": "^24.13.3",
+    "vite": "^8.3.4"
+  },
+  "dependencies": {
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
+    "element-plus": "^2.14.7",
+    "pinia": "^4.0.3",
+    "pinia-plugin-persistedstate": "^4.7.1",
+    "vue": "^3.5.43",
+    "vue-router": "^4.5.1"
+  },
+  "build": {
+    "appId": "com.myapp.desktop",
+    "productName": "未来电竞管理系统",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "notifyBubblePreload.js",
+      "trayMenuPreload.js",
+      "src/assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "未来电竞管理系统"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://weilaidong.oss-cn-beijing.aliyuncs.com/esports-updata/"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "hardenedRuntime": true,
+      "notarize": false
+    }
+  }
+}

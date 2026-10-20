@@ -1,0 +1,144 @@
+/* 列表页统一布局：自适应内容区高度 + 固定表格头 + 固定分页 + 中间滚动 */
+
+.list-page {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* gap: 16px; */
+  overflow: hidden;
+}
+
+.list-page__search {
+  flex: 0 0 auto;
+}
+
+/* 搜索卡片自带外边距，交给 list-page 的 gap 控制间距 */
+.list-page__search .search-form-container {
+  margin-bottom: 0;
+}
+
+/* 列表主体卡片 */
+.list-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+}
+
+/* 卡片内的固定工具条（按钮 / 标签页等） */
+.list-page__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 18px 7px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.list-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-main, #1d2129);
+}
+
+/* 中间滚动区 */
+.list-page__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-table-body);
+  margin: 8px 12px 0;
+}
+
+.list-page__body table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: transparent;
+  table-layout: fixed;
+}
+
+.list-page__body th,
+.list-page__body td {
+  padding: 14px 12px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--text-main, #1d2129);
+  border-bottom: 1px solid var(--border-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list-page__body tbody tr {
+  transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+.list-page__body tbody tr:nth-child(even) {
+  background: var(--bg-stripe);
+}
+
+.list-page__body tbody tr:hover {
+  background: var(--row-hover);
+}
+
+/* 表头固定 */
+.list-page__body thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-thead);
+  color: var(--text-main);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.list-page__body thead th:first-child {
+  border-top-left-radius: 12px;
+}
+
+.list-page__body thead th:last-child {
+  border-top-right-radius: 12px;
+}
+
+.list-page__body .empty {
+  text-align: center;
+  padding: 48px 0 36px;
+  color: var(--text-sub, #8a94a6);
+}
+
+.list-page__body .empty img {
+  width: 96px;
+  opacity: 0.72;
+  filter: drop-shadow(0 8px 16px rgba(148, 163, 184, 0.14));
+}
+
+.list-page__body .empty p {
+  margin: 12px 0 0;
+  font-size: 14px;
+  color: var(--text-sub);
+}
+
+/* 固定分页区 */
+.list-page__footer {
+  flex: 0 0 auto;
+  padding: 8px 18px 8px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-toolbar);
+}
+
+.list-page__footer .pagination-container {
+  padding-top: 0;
+}
