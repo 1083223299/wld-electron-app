@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
           <!-- 自动更新 -->
           <div class="setting-row">
             <div class="row-text">
-              <div class="row-title">自动启动检测更新</div>
+              <div class="row-title">启动自动检测更新</div>
               <div class="row-desc">有新版本时自动下载，完成后提示安装</div>
             </div>
             <el-switch
