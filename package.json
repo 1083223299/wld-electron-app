@@ -1,9 +1,11 @@
 {
+  "//": "Electron 桌面端主配置文件；JSON 不支持注释，本文件通过 '//': '说明' 字段实现注释（npm/electron-builder 会原样保留）",
   "name": "my-electron-app",
   "version": "1.0.0",
   "description": "未来电竞一站式操作系统",
   "main": "main.js",
   "scripts": {
+    "//": "命令说明：dev* 开发启动 | build* 构建产物 | start* 构建后运行 | pack* 仅打包目录 | dist* 打生成安装包（predist* 为发布前锁检查，npm 会自动先执行）",
     "dev": "node scripts/dev.js",
     "dev:local": "cross-env VITE_APP_ENV=local node scripts/dev.js",
     "dev:test": "cross-env VITE_APP_ENV=test node scripts/dev.js",
@@ -42,6 +44,7 @@
   },
   "author": "Jane Doe",
   "license": "MIT",
+  "//devDependencies": "开发期依赖：electron 运行时、vite 构建、electron-builder 打包",
   "devDependencies": {
     "@electron-forge/publisher-github": "^7.11.2",
     "@vitejs/plugin-vue": "^6.0.10",
@@ -50,6 +53,7 @@
     "electron-builder": "^24.13.3",
     "vite": "^8.3.4"
   },
+  "//dependencies": "运行时依赖：Vue3 + Element Plus + Pinia 持久化 + 路由，electron-updater 自动更新、electron-log 日志",
   "dependencies": {
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
@@ -60,6 +64,7 @@
     "vue-router": "^4.5.1"
   },
   "build": {
+    "//": "electron-builder 打包配置；环境变量 VITE_APP_ENV 决定构建目标，输出目录为 release/",
     "appId": "com.myapp.desktop",
     "productName": "未来电竞管理系统",
     "directories": {
@@ -75,6 +80,7 @@
       "package.json"
     ],
     "win": {
+      "//": "Windows：NSIS 安装包，exe 需签名并编辑版本信息",
       "target": [
         "nsis"
       ],
@@ -82,6 +88,7 @@
       "signAndEditExecutable": true
     },
     "nsis": {
+      "//": "NSIS 安装器：非一键安装，允许用户选择安装目录，创建桌面/开始菜单快捷方式",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
@@ -90,10 +97,12 @@
       "shortcutName": "未来电竞管理系统"
     },
     "publish": {
+      "//": "自动更新源：阿里云 OSS 通用仓库，electron-updater 从此地址拉取最新版本",
       "provider": "generic",
       "url": "https://weilaidong.oss-cn-beijing.aliyuncs.com/esports-updata/"
     },
     "mac": {
+      "//": "macOS：dmg + zip 双目标，开启 hardenedRuntime（公证当前关闭）",
       "target": [
         "dmg",
         "zip"
