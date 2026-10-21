@@ -1,206 +1,177 @@
 import { request } from '../request';
 
-const { mock } = request;
-
-// ===== 游戏主表（内存 mock DB） =====
-const GAME_DB = [
-  {
-    id: 46546,
-    name: '三角洲',
-    specs: ['护航', '陪玩'],
-    billPeriodDays: 7,
-    createTime: '2026-10-10 11:12:22',
-    deleted: false,
-  },
-  {
-    id: 46547,
-    name: '和平精英',
-    specs: ['单排上分', '四排吃鸡'],
-    billPeriodDays: 7,
-    createTime: '2026-10-10 11:12:22',
-    deleted: false,
-  },
-  {
-    id: 46548,
-    name: '王者荣耀',
-    specs: ['段位上分', '陪玩'],
-    billPeriodDays: 15,
-    createTime: '2026-10-08 09:30:00',
-    deleted: false,
-  },
-  {
-    id: 46549,
-    name: '英雄联盟',
-    specs: ['排位上分', '云顶之弈'],
-    billPeriodDays: 7,
-    createTime: '2026-10-05 16:20:11',
-    deleted: false,
-  },
-  {
-    id: 46550,
-    name: '永劫无间',
-    specs: ['排位赛', '陪练'],
-    billPeriodDays: 30,
-    createTime: '2026-09-28 14:08:55',
-    deleted: false,
-  },
-];
-
-// ===== SKU 映射表（内存 mock DB） =====
-// 一条记录 = 一个店铺下的一个 SKU，映射到某个游戏的某个规格
-const SKU_DB = [
-  {
-    id: 1,
-    channel: '抖音',
-    shop: '张三店铺',
-    productId: '896377857678',
-    skuId: '896377857678',
-    skuName: '绝密航天/巴克累计2088W 双子星（店长强推美吃）',
-    client: ['手游', '端游'],
-    gameId: 46546,
-    gameName: '三角洲',
-    spec: '护航',
-    matched: true,
-  },
-  {
-    id: 2,
-    channel: '抖音',
-    shop: '张三店铺',
-    productId: '896377857679',
-    skuId: '896377857679',
-    skuName: '和平精英 代练 星钻上王者',
-    client: ['手游'],
-    gameId: 46547,
-    gameName: '和平精英',
-    spec: '单排上分',
-    matched: true,
-  },
-  {
-    id: 3,
-    channel: '抖音',
-    shop: '张三店铺',
-    productId: '896377857680',
-    skuId: '896377857680',
-    skuName: '王者荣耀 陪玩 大神双排',
-    client: ['手游'],
-    gameId: null,
-    gameName: '',
-    spec: '',
-    matched: false,
-  },
-  {
-    id: 4,
-    channel: '抖音',
-    shop: '张三店铺',
-    productId: '896377857681',
-    skuId: '896377857681',
-    skuName: '英雄联盟 排位代练',
-    client: ['端游'],
-    gameId: null,
-    gameName: '',
-    spec: '',
-    matched: false,
-  },
-];
-
-let gameSeq = 46551;
-let skuSeq = 5;
-
-const now = () => {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-};
-
-const inRange = (value, range) => {
-  if (!Array.isArray(range) || !range.length) return true;
-  const [start, end] = range;
-  if (!start && !end) return true;
-  // createTime 是 'YYYY-MM-DD HH:mm:ss' 字符串，可直接字典比较
-  if (start && String(value) < new Date(start).toISOString().slice(0, 10)) return false;
-  if (end && String(value) > `${new Date(end).toISOString().slice(0, 10)} 23:59:59`) return false;
-  return true;
-};
+// =====================================================================
+// 游戏管理 / 规格管理：已按 OpenAPI 联调真实后端（鉴权走 request.js 自动附加 Bearer token）
+//   GET    /api/admin/games                  游戏列表（全量返回，无分页参数，分页/筛选由页面本地完成）
+//   POST   /api/admin/games                  新增游戏   body: { name, settleDays }
+//   PUT    /api/admin/games/{id}             编辑游戏   body: { name, settleDays }
+//   DELETE /api/admin/games/{id}             删除游戏（软删）
+//   GET    /api/admin/games/{gameId}/specs   规格列表
+//   POST   /api/admin/games/{gameId}/specs   新增规格   body: { name }
+//   PUT    /api/admin/games/{gameId}/specs/{id}  编辑规格   body: { name }
+//   DELETE /api/admin/games/{gameId}/specs/{id}  删除规格（软删）
+//
+// 说明：
+//   - 后端字段为 settleDays（结算天数），页面表单/列展示已对齐该字段；
+//   - 新增/编辑游戏时规格通过独立规格接口维护，见 createWithSpecs / updateWithSpecs；
+//   - SKU 映射相关接口（skuList / fetchSkusByProductIds / updateSku）暂无对应后端接口，
+//     暂保持本地 Mock，待后端提供接口文档后替换。
+// =====================================================================
 
 export const gameApi = {
+  // ============ 游戏主表 ============
+
   /**
-   * 游戏列表
-   * @param {{page?:number,pageSize?:number,gameId?:string,gameName?:string,createTime?:Array}} params
+   * 游戏列表（接口全量返回，本地分页/筛选由页面处理）
+   * @returns {Promise<Array<{id:number, name:string, status?:string, settleDays?:number, createTime?:string}>>}
    */
-  list: (params = {}) =>
-    mock(null, 200).then(() => {
-      const { page = 1, pageSize = 10, gameId = '', gameName = '', createTime = [] } = params;
-      let list = GAME_DB.filter((g) => !g.deleted);
-      if (gameId) list = list.filter((g) => String(g.id) === String(gameId).trim());
-      if (gameName) list = list.filter((g) => g.name.includes(String(gameName).trim()));
-      list = list.filter((g) => inRange(g.createTime, createTime));
-      // 按创建时间倒序
-      list = [...list].sort((a, b) => (a.createTime < b.createTime ? 1 : -1));
-      return {
-        total: list.length,
-        list: list.slice((page - 1) * pageSize, page * pageSize),
-      };
-    }),
+  list: () => request.get('/api/admin/games'),
 
-  /** 全部游戏（供 SKU 映射下拉选择） */
-  all: () =>
-    mock(null, 100).then(() =>
-      GAME_DB.filter((g) => !g.deleted).map((g) => ({
-        id: g.id,
-        name: g.name,
-        specs: g.specs,
-      }))
-    ),
+  /** 新增游戏 @param {{name:string, settleDays:number}} data */
+  create: ({ name, settleDays }) => request.post('/api/admin/games', { name, settleDays }),
 
-  create: (data) =>
-    mock(null, 200).then(() => {
-      // 唯一性校验
-      const dup = GAME_DB.find((g) => !g.deleted && g.name === data.name);
-      if (dup) throw new Error('游戏名称已存在');
-      const item = {
-        id: gameSeq++,
-        name: data.name,
-        specs: data.specs || [],
-        billPeriodDays: Number(data.billPeriodDays),
-        createTime: now(),
-        deleted: false,
-      };
-      GAME_DB.unshift(item);
-      return item;
-    }),
+  /** 编辑游戏 @param {number} id @param {{name:string, settleDays:number}} data */
+  update: (id, { name, settleDays }) =>
+    request.put(`/api/admin/games/${id}`, { name, settleDays }),
 
-  update: (id, data) =>
-    mock(null, 200).then(() => {
-      const item = GAME_DB.find((g) => g.id === Number(id));
-      if (!item) throw new Error('游戏不存在');
-      const dup = GAME_DB.find(
-        (g) => !g.deleted && g.id !== Number(id) && g.name === data.name
-      );
-      if (dup) throw new Error('游戏名称已存在');
-      Object.assign(item, {
-        name: data.name,
-        specs: data.specs || [],
-        billPeriodDays: Number(data.billPeriodDays),
-      });
-      return item;
-    }),
+  /** 删除游戏（软删） @param {number} id */
+  remove: (id) => request.del(`/api/admin/games/${id}`),
 
-  /** 软删除 */
-  remove: (id) =>
-    mock(null, 200).then(() => {
-      const item = GAME_DB.find((g) => g.id === Number(id));
-      if (item) item.deleted = true;
-      return true;
-    }),
+  // ============ 游戏规格 ============
 
-  // ============ SKU 映射 ============
+  /** 规格列表 @param {number} gameId */
+  specs: (gameId) => request.get(`/api/admin/games/${gameId}/specs`),
+
+  /** 新增规格 @param {number} gameId @param {string} name */
+  createSpec: (gameId, name) => request.post(`/api/admin/games/${gameId}/specs`, { name }),
+
+  /** 编辑规格 @param {number} gameId @param {number} id @param {string} name */
+  updateSpec: (gameId, id, name) =>
+    request.put(`/api/admin/games/${gameId}/specs/${id}`, { name }),
+
+  /** 删除规格（软删） @param {number} gameId @param {number} id */
+  removeSpec: (gameId, id) => request.del(`/api/admin/games/${gameId}/specs/${id}`),
+
+  // ============ 复合操作：新增/编辑游戏时同步维护规格 ============
+
+  /**
+   * 新增游戏 + 批量新增规格
+   * @param {{name:string, settleDays:number, specs:string[]}} data
+   */
+  createWithSpecs: async ({ name, settleDays, specs = [] } = {}) => {
+    const game = await gameApi.create({ name, settleDays });
+    if (specs.length) {
+      await Promise.all(specs.map((specName) => gameApi.createSpec(game.id, specName)));
+    }
+    return game;
+  },
+
+  /**
+   * 编辑游戏 + 规格差异同步（新增缺失规格、删除多余规格，名称变更按“删旧增新”处理）
+   * @param {number} id 游戏 ID
+   * @param {{name:string, settleDays:number, specs:string[]}} data
+   */
+  updateWithSpecs: async (id, { name, settleDays, specs = [] } = {}) => {
+    await gameApi.update(id, { name, settleDays });
+    const current = (await gameApi.specs(id)) || [];
+    const currentNames = new Set(current.map((s) => s.name));
+    const targetSet = new Set(specs);
+    const tasks = [];
+    for (const specName of specs) {
+      if (!currentNames.has(specName)) tasks.push(gameApi.createSpec(id, specName));
+    }
+    for (const spec of current) {
+      if (!targetSet.has(spec.name)) tasks.push(gameApi.removeSpec(id, spec.id));
+    }
+    await Promise.all(tasks);
+    return true;
+  },
+
+  /** 全部游戏（供 SKU 映射 / 玩家 / 俱乐部下拉选择），附带各游戏规格名 */
+  all: async () => {
+    const games = (await gameApi.list()) || [];
+    return Promise.all(
+      games.map(async (g) => {
+        let specs = [];
+        try {
+          specs = (await gameApi.specs(g.id)) || [];
+        } catch {
+          // 单个游戏规格拉取失败不阻塞整个下拉列表
+        }
+        return { id: g.id, name: g.name, specs: specs.map((s) => s.name) };
+      })
+    );
+  },
+
+  // =====================================================================
+  // SKU 映射（暂无后端接口，保持本地 Mock）
+  // =====================================================================
+
+  // ===== SKU 映射表（内存 mock DB） =====
+  // 一条记录 = 一个店铺下的一个 SKU，映射到某个游戏的某个规格
+  _skuDb: [
+    {
+      id: 1,
+      channel: '抖音',
+      shop: '张三店铺',
+      productId: '896377857678',
+      skuId: '896377857678',
+      skuName: '绝密航天/巴克累计2088W 双子星（店长强推美吃）',
+      client: ['手游', '端游'],
+      gameId: 46546,
+      gameName: '三角洲',
+      spec: '护航',
+      matched: true,
+    },
+    {
+      id: 2,
+      channel: '抖音',
+      shop: '张三店铺',
+      productId: '896377857679',
+      skuId: '896377857679',
+      skuName: '和平精英 代练 星钻上王者',
+      client: ['手游'],
+      gameId: 46547,
+      gameName: '和平精英',
+      spec: '单排上分',
+      matched: true,
+    },
+    {
+      id: 3,
+      channel: '抖音',
+      shop: '张三店铺',
+      productId: '896377857680',
+      skuId: '896377857680',
+      skuName: '王者荣耀 陪玩 大神双排',
+      client: ['手游'],
+      gameId: null,
+      gameName: '',
+      spec: '',
+      matched: false,
+    },
+    {
+      id: 4,
+      channel: '抖音',
+      shop: '张三店铺',
+      productId: '896377857681',
+      skuId: '896377857681',
+      skuName: '英雄联盟 排位代练',
+      client: ['端游'],
+      gameId: null,
+      gameName: '',
+      spec: '',
+      matched: false,
+    },
+  ],
+
+  _skuSeq: 5,
 
   /**
    * SKU 列表
    * @param {{page?:number,pageSize?:number,productId?:string,skuId?:string,skuName?:string,matched?:string,gameId?:number}} params
    */
   skuList: (params = {}) =>
-    mock(null, 200).then(() => {
+    request.mock(null, 200).then(() => {
       const {
         page = 1,
         pageSize = 10,
@@ -210,7 +181,7 @@ export const gameApi = {
         matched = '',
         gameId = '',
       } = params;
-      let list = SKU_DB;
+      let list = gameApi._skuDb;
       if (gameId) list = list.filter((s) => s.gameId === Number(gameId));
       if (productId) list = list.filter((s) => s.productId === String(productId).trim());
       if (skuId) list = list.filter((s) => s.skuId === String(skuId).trim());
@@ -228,7 +199,7 @@ export const gameApi = {
    * @param {{productIds:string}} productIds 多个商品ID用逗号分隔
    */
   fetchSkusByProductIds: ({ productIds = '' } = {}) =>
-    mock(null, 400).then(() => {
+    request.mock(null, 400).then(() => {
       const ids = String(productIds)
         .split(/[,，\s]+/)
         .map((s) => s.trim())
@@ -238,7 +209,7 @@ export const gameApi = {
       const result = [];
       ids.forEach((pid, idx) => {
         result.push({
-          id: skuSeq++,
+          id: gameApi._skuSeq++,
           channel: '抖音',
           shop: '张三店铺',
           productId: pid,
@@ -252,7 +223,7 @@ export const gameApi = {
         });
       });
       // 写入 DB
-      SKU_DB.push(...result);
+      gameApi._skuDb.push(...result);
       return result;
     }),
 
@@ -261,8 +232,8 @@ export const gameApi = {
    * @param {{id:number,client:string[],gameId:number,gameName:string,spec:string}} data
    */
   updateSku: (data) =>
-    mock(null, 200).then(() => {
-      const item = SKU_DB.find((s) => s.id === Number(data.id));
+    request.mock(null, 200).then(() => {
+      const item = gameApi._skuDb.find((s) => s.id === Number(data.id));
       if (!item) throw new Error('SKU 不存在');
       Object.assign(item, {
         client: data.client || [],

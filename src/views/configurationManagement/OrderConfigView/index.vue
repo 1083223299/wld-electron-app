@@ -5,21 +5,27 @@ import { orderConfigApi } from '../../../api/modules/orderConfig';
 
 const { show } = useToast();
 
-// ============ 表单数据 ============
+// ============ 表单数据（字段 key 与 orderConfig.js 的 TIMEOUT_ITEMS 对齐） ============
 const form = reactive({
-  pendingClaimMinutes: '', // 待领取
-  pendingDispatchMinutes: '', // 待派单
-  pendingAcceptMinutes: '', // 待接单
+  grabMinutes: '', // 待接单抢单时长（WAIT_TAKE）
+  takeTimeoutMinutes: '', // 接单后未提交验收（TAKE_TIMEOUT）
+  stuckMinutes: '', // 待接单卡单（STUCK）
 });
 
 const loading = ref(false); // 加载中
 const submitting = ref(false); // 提交中
 
-// 表单项配置（label / 字段 key / 说明）
+// 可配项（label / 字段 key / 说明）
 const fields = [
-  { key: 'pendingClaimMinutes', label: '待领取', tip: '订单进入领取大厅后，超过该时长未被领取视为卡单' },
-  { key: 'pendingDispatchMinutes', label: '待派单', tip: '客服派单后，超过该时长未派出给打手视为卡单' },
-  { key: 'pendingAcceptMinutes', label: '待接单', tip: '派给打手后，超过该时长未被打手接单视为卡单' },
+  { key: 'grabMinutes', label: '待接单抢单时长', tip: '打手进入抢单大厅后，超过该时长未接单视为超时（读取优先 WAIT_TAKE，无则取 GRAB）' },
+  { key: 'takeTimeoutMinutes', label: '接单后未提交验收', tip: '打手接单后，超过该时长仍未提交验收视为超时' },
+  { key: 'stuckMinutes', label: '待接单卡单', tip: '待接单状态超过该时长视为卡单' },
+];
+
+// 现网暂无超时 code 的环节：灰显，不做可配项
+const lockedFields = [
+  { label: '待领取', tip: '订单进入领取大厅的超时配置暂未开放' },
+  { label: '待派单', tip: '客服派单环节的超时配置暂未开放' },
 ];
 
 // ============ 拉取配置 ============
@@ -27,9 +33,9 @@ async function fetchConfig() {
   loading.value = true;
   try {
     const res = await orderConfigApi.get();
-    form.pendingClaimMinutes = res.pendingClaimMinutes;
-    form.pendingDispatchMinutes = res.pendingDispatchMinutes;
-    form.pendingAcceptMinutes = res.pendingAcceptMinutes;
+    form.grabMinutes = res?.grabMinutes ?? '';
+    form.takeTimeoutMinutes = res?.takeTimeoutMinutes ?? '';
+    form.stuckMinutes = res?.stuckMinutes ?? '';
   } finally {
     loading.value = false;
   }
@@ -68,10 +74,12 @@ async function handleSubmit() {
   submitting.value = true;
   try {
     await orderConfigApi.save({
-      pendingClaimMinutes: Number(form.pendingClaimMinutes),
-      pendingDispatchMinutes: Number(form.pendingDispatchMinutes),
-      pendingAcceptMinutes: Number(form.pendingAcceptMinutes),
+      grabMinutes: Number(form.grabMinutes),
+      takeTimeoutMinutes: Number(form.takeTimeoutMinutes),
+      stuckMinutes: Number(form.stuckMinutes),
     });
+    // 保存成功后重新拉取，回显服务端最新值
+    await fetchConfig();
     show('保存成功', 'success');
   } catch (e) {
     show(e?.message || '保存失败', 'error');
@@ -88,12 +96,13 @@ onMounted(fetchConfig);
     <div class="config-card">
       <div class="card-title">
         <strong>卡单时长配置</strong>
-        <span class="subtitle">配置订单各节点的卡单时长，超时未流转将触发卡单提醒</span>
+        <span class="subtitle">配置订单各节点的超时与卡单时长，超时未流转将触发对应提醒</span>
       </div>
 
       <div v-if="loading" class="loading-tip">加载中...</div>
 
       <template v-else>
+        <!-- 可配项 -->
         <div v-for="f in fields" :key="f.key" class="form-row">
           <label class="form-label">{{ f.label }}</label>
           <div class="field-wrap">
@@ -105,6 +114,17 @@ onMounted(fetchConfig);
               @input="onInput(f.key, $event)"
             />
             <span class="unit">分钟</span>
+          </div>
+          <span class="field-tip">{{ f.tip }}</span>
+        </div>
+
+        <!-- 暂未开放项（灰显，不可编辑） -->
+        <div v-for="f in lockedFields" :key="f.label" class="form-row is-locked">
+          <label class="form-label">{{ f.label }}</label>
+          <div class="field-wrap">
+            <input class="locked-input" type="text" placeholder="暂未开放" disabled />
+            <span class="unit">分钟</span>
+            <span class="lock-badge">未开放</span>
           </div>
           <span class="field-tip">{{ f.tip }}</span>
         </div>
@@ -128,7 +148,6 @@ onMounted(fetchConfig);
   height: 100%;
   padding: 24px;
   overflow-y: auto;
-  /* background: #f5f7fb; */
   box-sizing: border-box;
 }
 
@@ -161,7 +180,7 @@ onMounted(fetchConfig);
 
 .form-row {
   display: grid;
-  grid-template-columns: 80px 1fr;
+  grid-template-columns: 96px 1fr;
   grid-template-areas:
     'label field'
     'label tip';
@@ -220,9 +239,34 @@ onMounted(fetchConfig);
   color: #9aa3b5;
 }
 
+/* 暂未开放项：整体降透明度，输入框禁用 */
+.form-row.is-locked {
+  opacity: 0.55;
+}
+
+.form-row.is-locked .locked-input {
+  background: #eef1f6;
+  color: #9aa3b5;
+  cursor: not-allowed;
+}
+
+.form-row.is-locked .locked-input:focus {
+  border-color: #e3e7f0;
+  box-shadow: none;
+}
+
+.lock-badge {
+  font-size: 11px;
+  color: #8a93a6;
+  border: 1px solid #e3e7f0;
+  border-radius: 6px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
 .footer {
   margin-top: 8px;
-  padding-left: 96px;
+  padding-left: 112px;
 }
 
 .loading-tip {

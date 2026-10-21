@@ -3,22 +3,48 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useNotifyStore } from '../../../stores/notify';
 import { NOTIFY_TYPE } from '../../../api/notifySocket';
+import { notifyApi, normalizeNotification } from '../../../api/modules/notification';
 import { useToast } from '../../../composables/useToast';
 
 /**
  * 工作协作 > 系统通知（入口：右上角铃铛）
  * - 顶部「仅看未读」开关（可选中 / 取消选中）+ 全部已读
  * - 列表字段：标题 / 正文 / 时间 / 查看（点击=标记已读并跳转对应页面）
+ * - 数据源：管理端接口 GET /api/admin/notifications（后端为权威列表）；
+ *   已读走 POST /api/admin/notifications/{id}/read（接口无批量端点，全部已读按未读列表逐条提交）；
+ *   接口不可用时（如本地 mock 环境无后端）回落到 store 实时通道列表，保证页面可用
  */
 const notify = useNotifyStore();
 const router = useRouter();
 const { show } = useToast();
 
 const onlyUnread = ref(false); // 仅看未读开关
+const items = ref([]); // 接口返回的通知列表（新在前）
+const loading = ref(false);
 
 const filtered = computed(() =>
-  onlyUnread.value ? notify.items.filter((i) => !i.read) : notify.items
+  onlyUnread.value ? items.value.filter((i) => !i.read) : items.value
 );
+const unreadCount = computed(() => items.value.filter((i) => !i.read).length);
+
+/* ================= 列表加载（管理端接口） ================= */
+async function loadList() {
+  loading.value = true;
+  try {
+    const list = await notifyApi.list();
+    items.value = (Array.isArray(list) ? list : [])
+      .map(normalizeNotification)
+      .sort((a, b) => String(b.time).localeCompare(String(a.time)));
+    // 同步到 store：铃铛角标 / 托盘未读列表与后端保持一致
+    notify.items = items.value;
+    notify.syncTrayBadge();
+  } catch {
+    // 接口不可用（本地 mock 环境等）：回落到实时通道列表
+    items.value = notify.items.slice();
+  } finally {
+    loading.value = false;
+  }
+}
 
 /* ================= 时间显示（相对时间，如“2分钟前”） ================= */
 function relativeTime(t) {
@@ -48,16 +74,49 @@ function jumpTarget(item) {
   return '/notify';
 }
 
-/** 点击查看：未读 → 标记已读，并按类型跳转对应页面 */
-function handleView(item) {
-  if (!item.read) notify.markRead(item.id);
+/** 点击查看：未读 → 先调接口标记已读，再按类型跳转对应页面 */
+async function handleView(item) {
+  if (!item.read) {
+    try {
+      await notifyApi.markRead(item.id);
+      item.read = true;
+      notify.syncTrayBadge();
+    } catch {
+      // 接口不可用时（本地 mock 环境）回落到本地标记；真实环境 id 不在 store 中则为空操作
+      notify.markRead(item.id);
+      notify.syncTrayBadge();
+    }
+  }
   router.push(jumpTarget(item));
 }
 
-function handleMarkAllRead() {
-  if (!notify.unreadCount) return;
-  notify.markAllRead();
-  show('已全部标记为已读', 'success');
+/** 全部已读：接口无批量端点，按未读列表逐条提交，全部成功再更新本地状态 */
+async function handleMarkAllRead() {
+  const unread = items.value.filter((i) => !i.read);
+  if (!unread.length) return;
+  const results = await Promise.allSettled(unread.map((i) => notifyApi.markRead(i.id)));
+  const ok = results.filter((r) => r.status === 'fulfilled').length;
+
+  if (ok === 0) {
+    // 接口不可用（本地 mock 环境）：回落到本地全部已读，保持演示可用
+    unread.forEach((i) => {
+      i.read = true;
+    });
+    notify.markAllRead();
+    show('已全部标记为已读', 'success');
+    return;
+  }
+
+  unread.forEach((item, idx) => {
+    if (results[idx].status === 'fulfilled') item.read = true;
+  });
+  notify.items = items.value;
+  notify.syncTrayBadge();
+  if (ok === results.length) {
+    show('已全部标记为已读', 'success');
+  } else {
+    show(`已标记 ${ok} 条，${results.length - ok} 条失败`, 'error');
+  }
 }
 
 onMounted(() => {
@@ -66,6 +125,7 @@ onMounted(() => {
   if (window.notifyBridge && window.notifyBridge.clearFlash) {
     window.notifyBridge.clearFlash();
   }
+  loadList();
 });
 </script>
 
@@ -75,18 +135,18 @@ onMounted(() => {
     <div class="notify-toolbar">
       <el-checkbox v-model="onlyUnread" class="only-unread-check">仅看未读</el-checkbox>
       <div class="toolbar-right">
-        <span v-if="notify.unreadCount" class="total-unread">未读 {{ notify.unreadCount }} 条</span>
+        <span v-if="unreadCount" class="total-unread">未读 {{ unreadCount }} 条</span>
         <button
           class="btn btn-plain btn-sm"
           type="button"
-          :disabled="!notify.unreadCount"
+          :disabled="!unreadCount"
           @click="handleMarkAllRead"
         >全部已读</button>
       </div>
     </div>
 
     <!-- 通知列表 -->
-    <div class="notify-list">
+    <div class="notify-list" v-loading="loading">
       <div
         v-for="item in filtered"
         :key="item.id"

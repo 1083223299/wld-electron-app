@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import AppModal from '../../../components/AppModal.vue';
@@ -7,78 +7,104 @@ import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
 import { useUserStore } from '../../../stores/user';
+import {
+  orderApi,
+  STATUS_OPTIONS,
+  AUDIT_OPTIONS,
+  TYPE_OPTIONS,
+  CHANNEL_OPTIONS,
+  statusText,
+  auditText,
+  typeText,
+  channelText,
+} from '../../../api/modules/order';
+import { gameApi } from '../../../api/modules/game';
+import { clubApi } from '../../../api/modules/club';
+import { playerApi } from '../../../api/modules/player';
 import OrderDetailDialog from './OrderDetailDialog.vue';
 import OrderEditDialog from './OrderEditDialog.vue';
 import AuditDialog from './AuditDialog.vue';
 import {
-  CURRENT_USER,
-  orderStore,
-  getRelation,
-  CHANNELS,
-  STATUS_OPTIONS,
-  AUDIT_OPTIONS,
   ATTR_OPTIONS,
-  TYPE_OPTIONS,
-  CLIENT_OPTIONS,
   TAG_OPTIONS,
-  CALL_TYPE_OPTIONS,
-  GAME_OPTIONS,
-  SPEC_OPTIONS,
-  CLUB_OPTIONS,
-  PLAYER_OPTIONS,
   STATUS_CLASS,
   AUDIT_CLASS,
+  CALL_TYPE_OPTIONS,
+  CLIENT_OPTIONS,
 } from './mockData';
 
+/**
+ * 订单列表（管理端）接口联调（依据最新 OpenAPI 2026-10-20）
+ * - 我的订单 / 全部订单：两个接口切换（orderApi.mine / orderApi.all，内部 scope=MINE/ALL），
+ *   后续统一为 orderApi.list({ scope, ...params })（见 order.js 顶部 TODO）
+ * - 权限（原型标注：仅客服角色有「我的订单/全部订单」切换；管理员、审核员看到的全是全部订单；
+ *   领取人/所属客服仅管理员可在列表「领取人」列行内修改：铅笔 → 独立弹窗走 PUT /{id}/owner，不在编辑弹窗编辑）
+ * - 鉴权：Bearer token 由 request.js 自动附加；ownerId/ownerName 仅 scope=ALL 时有效
+ * - 新 OpenAPI 已支持（已接入）：筛选参数 attribute(MAIN/SUB)/tag/clients(PC/MOBILE)/ownerName、
+ *   status 枚举含 WAIT_CLAIM、列表/详情返回 teamCode（组队码）与 statusCounts（状态计数）、
+ *   maintain 支持 teamCode、call body 支持 type 英文枚举、create body 支持 orderType/playerCount、
+ *   游戏/规格 GET /games + /games/{id}/specs
+ * - 仍缺（保留原型 UI/兜底，待后端补充）：可绑主单候选专用接口（勿 scope=ALL 硬筛，当前候选为空）、
+ *   回退(待接单→待派单)、解绑 body 多选、派单指定打手、
+ *   维护/审核的二维码/押金单/完单凭证/陪玩备注、分润明细、orderType 仅 NORMAL（特惠单枚举待补充）
+ */
 const { confirm } = useConfirm();
 const { show } = useToast();
 const userStore = useUserStore();
 
 const money = (value) => (Number(value) || 0).toFixed(2);
 
-/** 当前登录角色（客服 service / 审核员 audit / 管理员 admin），fallback 到 mock 常量 */
-const userRole = computed(() => userStore.role || CURRENT_USER.role);
+/** 当前登录角色（客服 service / 审核员 audit / 管理员 admin） */
+const userRole = computed(() => userStore.role || 'admin');
 const isService = computed(() => userRole.value === 'service');
 const isAudit = computed(() => userRole.value === 'audit');
+const isAdmin = computed(() => userRole.value === 'admin');
 
-/* ===== 我的订单 / 全部订单（管理员/审核员默认我的订单；客服无"我的订单"入口，仅全部订单） ===== */
-const scope = ref(isService.value ? 'all' : 'mine');
+/* ===== 我的订单 / 全部订单（原型标注：仅客服角色有切换；管理员、审核员看到的全是全部订单） ===== */
+const scope = ref(isService.value ? 'mine' : 'all');
 const scopeOptions = computed(() =>
-  isService.value ? [{ label: '全部订单', value: 'all' }] : [
+  isService.value ? [
     { label: '我的订单', value: 'mine' },
     { label: '全部订单', value: 'all' },
-  ]
+  ] : [{ label: '全部订单', value: 'all' }]
 );
 
-/* ===== 筛选 ===== */
+function switchScope(value) {
+  scope.value = value;
+  page.value = 1;
+  fetchList();
+}
+
+/* ===== 筛选（接口已支持的参数参与服务端查询；未提供的原型筛选字段保留 UI，暂不参与查询） ===== */
 const filter = reactive({
   orderNo: '',
   thirdOrderNo: '',
-  channel: '',
+  channel: '', // channelCode
   status: '',
   auditStatus: '',
-  attribute: '',
+  attribute: '', // 主订单/子订单（新 OpenAPI 已支持 attribute=MAIN/SUB）
   orderType: '',
-  claimer: '',
-  clientType: '',
-  tag: '',
+  claimer: '', // 领取人姓名/企微（新 OpenAPI 已支持 ownerName 模糊，仅 scope=ALL 有效）
+  ownerId: '', // 领取人账号ID（接口参数，仅 scope=ALL 有效）
+  clientType: '', // 客户端（新 OpenAPI 已支持 clients=PC/MOBILE，原型中文做映射）
+  tag: '', // 订单标签（新 OpenAPI 已支持 tag=CALL/STUCK 等，原型中文做映射）
   createTime: [],
 });
 
 const searchFields = [
-  { prop: 'orderNo', label: '本平台订单号', type: 'input', placeholder: '请输入订单号', span: 4 },
-  { prop: 'thirdOrderNo', label: '第三方订单号', type: 'input', placeholder: '请输入订单号', span: 4 },
+  { prop: 'orderNo', label: '本平台订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 4 },
+  { prop: 'thirdOrderNo', label: '第三方订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 4 },
   {
     prop: 'channel', label: '渠道', type: 'select', placeholder: '全部', span: 4,
-    options: [{ label: '全部', value: '' }, ...CHANNELS.map((item) => ({ label: item, value: item }))],
+    options: [{ label: '全部', value: '' }, ...CHANNEL_OPTIONS],
   },
   {
     prop: 'status', label: '订单状态', type: 'select', placeholder: '全部', span: 4,
-    options: [{ label: '全部', value: '' }, ...STATUS_OPTIONS.map((item) => ({ label: item, value: item }))],
+    options: [{ label: '全部', value: '' }, ...STATUS_OPTIONS],
   },
   {
     prop: 'auditStatus', label: '审核状态', type: 'select', placeholder: '全部', span: 4,
-    options: [{ label: '全部', value: '' }, ...AUDIT_OPTIONS.map((item) => ({ label: item, value: item }))],
+    options: [{ label: '全部', value: '' }, ...AUDIT_OPTIONS],
   },
   {
     prop: 'attribute', label: '订单属性', type: 'select', placeholder: '全部', span: 4,
@@ -86,9 +112,10 @@ const searchFields = [
   },
   {
     prop: 'orderType', label: '订单类型', type: 'select', placeholder: '全部', span: 4,
-    options: [{ label: '全部', value: '' }, ...TYPE_OPTIONS.map((item) => ({ label: item, value: item }))],
+    options: [{ label: '全部', value: '' }, ...TYPE_OPTIONS],
   },
-  { prop: 'claimer', label: '领取人', type: 'input', placeholder: '请输入领取人', span: 4 },
+  { prop: 'claimer', label: '领取人', type: 'input', placeholder: '请输入领取人（企微名/客服名）', span: 4 },
+  { prop: 'ownerId', label: '领取人账号ID', type: 'input', inputType: 'number', placeholder: '仅全部订单时有效', span: 4 },
   {
     prop: 'clientType', label: '客户端', type: 'select', placeholder: '全部', span: 4,
     options: [{ label: '全部', value: '' }, ...CLIENT_OPTIONS.map((item) => ({ label: item, value: item }))],
@@ -108,53 +135,203 @@ const searchFields = [
 ];
 
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['orderNo', 'thirdOrderNo', 'channel', 'status', 'auditStatus', 'attribute', 'orderType', 'claimer', 'clientType', 'tag', 'createTime'],
+  filterKeys: ['orderNo', 'thirdOrderNo', 'channel', 'status', 'auditStatus', 'attribute', 'orderType', 'claimer', 'ownerId', 'clientType', 'tag', 'createTime'],
 });
 restoreFilter(filter);
 
-const baseRows = computed(() => {
-  if (scope.value === 'mine') {
-    return orderStore.orders.filter((o) => o.claimerName === CURRENT_USER.name);
+/* ===== 游戏/规格目录（供下拉选择与列表展示；真实联调时规格 id 以游戏/规格列表接口为准） ===== */
+const catalog = ref([]); // [{ id, name, specs: [{ id, name }] }]
+const catalogLoaded = ref(false);
+
+async function loadCatalog() {
+  if (catalogLoaded.value) return;
+  try {
+    const games = await gameApi.all();
+    catalog.value = (games || []).map((game) => ({
+      id: game.id,
+      name: game.name,
+      specs: (game.specs || []).map((name, i) => ({ id: i + 1, name })),
+    }));
+  } catch {
+    catalog.value = [];
+  } finally {
+    catalogLoaded.value = true;
   }
-  return orderStore.orders;
-});
+}
 
-const filteredRows = computed(() => {
-  return baseRows.value.filter((row) => {
-    const orderNoMatch = !filter.orderNo || row.orderNo === String(filter.orderNo).trim();
-    const thirdMatch = !filter.thirdOrderNo || row.thirdOrderNo === String(filter.thirdOrderNo).trim();
-    const channelMatch = !filter.channel || row.channel === filter.channel;
-    const statusMatch = !filter.status || row.status === filter.status;
-    const auditMatch = !filter.auditStatus || row.auditStatus === filter.auditStatus;
-    const attrMatch = !filter.attribute || row.attribute === filter.attribute;
-    const typeMatch = !filter.orderType || row.orderType === filter.orderType;
-    const kw = String(filter.claimer || '').trim();
-    const claimerMatch = !kw || row.claimerName === kw || row.claimerCorp === kw;
-    const clientMatch = !filter.clientType || (row.clientType || []).includes(filter.clientType);
-    const tagMatch = !filter.tag || (row.tags || []).includes(filter.tag);
-    let timeMatch = true;
-    if (Array.isArray(filter.createTime) && filter.createTime.length === 2 && filter.createTime[0]) {
-      const start = new Date(filter.createTime[0]).getTime();
-      const end = new Date(filter.createTime[1]).getTime();
-      const t = new Date(row.createTime.replace(/-/g, '/')).getTime();
-      timeMatch = t >= start && t <= end;
-    }
-    return (
-      orderNoMatch && thirdMatch && channelMatch && statusMatch && auditMatch &&
-      attrMatch && typeMatch && claimerMatch && clientMatch && tagMatch && timeMatch
-    );
-  });
-});
+const gameOptions = computed(() => catalog.value.map((g) => ({ label: g.name, value: g.id })));
 
-const total = computed(() => filteredRows.value.length);
-const rows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
+function specOptionsOf(gameId) {
+  const game = catalog.value.find((g) => g.id === Number(gameId));
+  return game ? game.specs.map((s) => ({ label: s.name, value: s.id })) : [];
+}
+
+function gameNameOf(gameId) {
+  const game = catalog.value.find((g) => g.id === Number(gameId));
+  return game ? game.name : '—';
+}
+
+function specNameOf(gameId, specId) {
+  const game = catalog.value.find((g) => g.id === Number(gameId));
+  const spec = game && game.specs.find((s) => s.id === Number(specId));
+  return spec ? spec.name : '—';
+}
+
+/* ===== 列表数据（服务端分页/筛选） ===== */
+const rows = ref([]);
+const total = ref(0);
+const loading = ref(false);
+
+/**
+ * 后端订单标签枚举 → 中文（列表/详情已返回；新 OpenAPI 枚举：
+ * CALL/STUCK/WAIT_SHIP/SHIPPED/AFTER_SALE/FROZEN/TRANSFER/PARTIAL_REFUND/REFUNDED）
+ */
+const TAG_TEXT = {
+  CALL: '呼叫',
+  STUCK: '卡单',
+  WAIT_SHIP: '待发货',
+  SHIPPED: '已发货',
+  AFTER_SALE: '售后中',
+  FROZEN: '冻结',
+  TRANSFER: '转单',
+  PARTIAL_REFUND: '部分退款',
+  REFUNDED: '已退款',
+};
+
+/** 中文标签 → 后端枚举（筛选参数 tag 用） */
+const TAG_ENUM = Object.fromEntries(Object.entries(TAG_TEXT).map(([k, v]) => [v, k]));
+
+/** 订单属性：原型中文 → 后端枚举（attribute=MAIN/SUB） */
+const ATTR_ENUM = { 主订单: 'MAIN', 子订单: 'SUB' };
+
+/** 客户端：原型中文 → 后端枚举（clients=PC/MOBILE；后端也接受自由字符串） */
+const CLIENT_ENUM = { 端游: 'PC', 手游: 'MOBILE' };
+
+/** 合并接口 tags 与派生标签（冻结/售后中） */
+function mapTags(item = {}) {
+  const tags = new Set((item.tags || []).map((t) => TAG_TEXT[t] || t));
+  if (Number(item.frozen) === 1) tags.add('冻结');
+  if (Number(item.afterSaleFlag) === 1) tags.add('售后中');
+  return Array.from(tags);
+}
+
+/**
+ * 后端列表字段 → 页面展示字段。
+ * 接口已返回：parentOrderId（主子单列）、tags、createdAt 等；
+ * 仍未返回的原型字段（组队码/存单/凭证等）兜底注入，待后端补充接口后自动有数据。
+ */
+function mapOrderRow(item = {}) {
+  return {
+    id: item.id,
+    orderNo: item.orderNo || '',
+    thirdOrderNo: item.thirdOrderNo || '',
+    channel: channelText(item.channelCode),
+    channelCode: item.channelCode,
+    amount: Number(item.amount) || 0,
+    product: item.itemName || '',
+    gameName: gameNameOf(item.gameId),
+    gameId: item.gameId,
+    spec: specNameOf(item.gameId, item.specId),
+    specId: item.specId,
+    clients: item.clients || '',
+    status: statusText(item.status),
+    statusCode: item.status,
+    preStatus: item.preStatus,
+    auditStatus: auditText(item.auditStatus),
+    auditCode: item.auditStatus,
+    claimerName: item.ownerName || '',
+    claimerCorp: item.ownerWecomName || '',
+    ownerAccountId: item.ownerAccountId,
+    tags: mapTags(item),
+    frozen: Number(item.frozen) === 1,
+    afterSale: Number(item.afterSaleFlag) === 1,
+    createTime: item.createdAt || '',
+    orderType: typeText(item.orderType),
+    orderTypeCode: item.orderType,
+    /* ---- 以下字段接口未返回，兜底供原型弹窗展示（待后端补充） ---- */
+    roleName: item.roleName || '',
+    /* teamCode（组队码）：新 OpenAPI 列表/详情已返回 */
+    groupCode: item.teamCode || item.groupCode || '',
+    attribute: item.parentOrderId ? '子订单' : '—', // parentOrderId 已由列表/详情返回
+    bound: !!item.parentOrderId,
+    refunded: false, // 是否已退款接口待补充
+    mainOrderNo: item.parentOrderId ? String(item.parentOrderId) : '',
+    qrImg: item.qrImg || '',
+    depositTarget: item.depositTarget || '1000',
+    depositReason: item.depositReason || '',
+    depositFirst: item.depositFirst || '500',
+    depositSecond: item.depositSecond || '500',
+    depositImages: item.depositImages || [],
+    depositRemark: item.depositRemark || '',
+    proofFirst: item.proofFirst || '',
+    proofLast: item.proofLast || '',
+    proofProcess: item.proofProcess || [],
+    proofUploadTime: item.proofUploadTime || '',
+    playerRemark: item.playerRemark || '',
+    lastRejectReason: item.lastRejectReason || '',
+    statusCount: '',
+  };
+}
+
+const fmtDay = (d) => {
+  if (!d) return '';
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
+function buildParams() {
+  const [fromDay, toDay] = Array.isArray(filter.createTime) ? filter.createTime : [];
+  const params = {
+    page: page.value,
+    pageSize: pageSize.value,
+    orderNo: String(filter.orderNo || '').trim(),
+    thirdOrderNo: String(filter.thirdOrderNo || '').trim(),
+    channelCode: filter.channel,
+    status: filter.status,
+    auditStatus: filter.auditStatus,
+    orderType: filter.orderType,
+    from: fmtDay(fromDay),
+    to: fmtDay(toDay),
+  };
+  // ownerId/ownerName 仅 scope=ALL 时有效（新 OpenAPI）
+  if (scope.value === 'all' && filter.ownerId !== '' && filter.ownerId !== null && filter.ownerId !== undefined) {
+    const n = Number(filter.ownerId);
+    if (Number.isFinite(n) && n > 0) params.ownerId = n;
+  }
+  if (scope.value === 'all' && String(filter.claimer || '').trim()) {
+    params.ownerName = String(filter.claimer).trim(); // 客服姓名/企微模糊
+  }
+  // 订单属性/标签/客户端：新 OpenAPI 已支持，原型中文做枚举映射后参与查询
+  const attrEnum = ATTR_ENUM[filter.attribute];
+  if (attrEnum) params.attribute = attrEnum;
+  const tagEnum = TAG_ENUM[filter.tag];
+  if (tagEnum) params.tag = tagEnum;
+  const clientEnum = CLIENT_ENUM[filter.clientType];
+  if (clientEnum) params.clients = clientEnum;
+  return params;
+}
+
+async function fetchList() {
+  loading.value = true;
+  try {
+    // 我的订单/全部订单：两个接口切换（mine/all），后续统一为 orderApi.list({ scope }) 查询方式
+    const res = scope.value === 'mine' ? await orderApi.mine(buildParams()) : await orderApi.all(buildParams());
+    rows.value = ((res && res.list) || []).map(mapOrderRow);
+    total.value = (res && res.total) || 0;
+  } catch {
+    rows.value = [];
+    total.value = 0;
+  } finally {
+    loading.value = false;
+  }
+}
 
 function handleSearch(values) {
   Object.assign(filter, values);
   rememberFilter(filter, true);
+  fetchList();
 }
 
 function handleReset() {
@@ -163,9 +340,15 @@ function handleReset() {
     else filter[key] = '';
   });
   rememberFilter(filter, true);
+  fetchList();
 }
 
-/* ===== 表格列 ===== */
+onMounted(async () => {
+  await loadCatalog();
+  fetchList();
+});
+
+/* ===== 表格列（依据原型列顺序） ===== */
 const columns = [
   { key: 'orderType', title: '订单类型' },
   { key: 'orderNo', title: '本平台订单号' },
@@ -194,7 +377,7 @@ function canShow(row, action) {
   if (action === '查看') return ['待接单', '进行中', '已完成', '交易关闭'].includes(row.status);
   if (isAudit.value) return false; // 审核员除"审核/查看"外无其他操作按钮
 
-  /* 状态维度 */
+  /* 状态维度（bound/refunded 接口暂未返回，待后端补充后自动收紧） */
   switch (action) {
     case '编辑': return row.status === '待派单' || (row.status === '进行中' && row.auditStatus === '未提交');
     case '绑主单': return row.status === '待派单' && !row.bound;
@@ -227,56 +410,147 @@ function tagClass(tag) {
   return TAG_CLASS_MAP[tag] || 'info';
 }
 
-function statusText(row) {
+/** 待接单订单带名额数展示：待接单(0/N)（statusCount 聚合字段接口待补充，兜底为空） */
+function displayStatus(row) {
   if (row.status === '待接单' && row.statusCount) return `${row.status}(${row.statusCount})`;
   return row.status;
 }
 
-/* ===== 详情 ===== */
+/* ===== 详情（接口：GET /{id} + GET /{id}/logs） ===== */
 const detailVisible = ref(false);
 const detailRow = ref(null);
+const detailLogs = ref([]);
 
-function openDetail(row) {
-  detailRow.value = row;
-  detailVisible.value = true;
+function mapDetail(item = {}) {
+  return {
+    id: item.id,
+    orderNo: item.orderNo || '',
+    thirdOrderNo: item.thirdOrderNo || '',
+    channel: channelText(item.channelCode),
+    channelCode: item.channelCode,
+    shopId: item.shopId || '',
+    amount: Number(item.amount) || 0,
+    refundedAmount: Number(item.refundedAmount) || 0,
+    product: item.itemName || '',
+    gameName: gameNameOf(item.gameId),
+    gameId: item.gameId,
+    spec: specNameOf(item.gameId, item.specId),
+    specId: item.specId,
+    clients: item.clients || '',
+    playerCount: item.playerCount,
+    takenCount: item.takenCount,
+    assignedPlayerCount: item.assignedPlayerCount,
+    status: statusText(item.status),
+    statusCode: item.status,
+    preStatus: item.preStatus,
+    auditStatus: auditText(item.auditStatus),
+    claimerName: item.ownerName || '',
+    claimerCorp: item.ownerWecomName || '',
+    ownerAccountId: item.ownerAccountId,
+    tags: mapTags(item),
+    frozen: Number(item.frozen) === 1,
+    freezeReason: item.freezeReason || '',
+    rejectCount: item.rejectCount || 0,
+    partialRefunded: Number(item.partialRefunded) === 1,
+    afterSale: Number(item.afterSaleFlag) === 1,
+    platformAdjust: item.platformAdjust, // 减价为负
+    clubAdjust: item.clubAdjust, // 减价为负
+    settleDueAt: item.settleDueAt || '',
+    settleDaysSnapshot: item.settleDaysSnapshot,
+    slots: (item.slots || []).map((s) => ({ ...s })),
+    orderType: typeText(item.orderType),
+    orderTypeCode: item.orderType,
+    createTime: item.createdAt || '',
+    /* ---- 以下字段接口未返回，兜底供原型弹窗展示（待后端补充） ---- */
+    roleName: item.roleName || '',
+    /* teamCode（组队码）：新 OpenAPI 列表/详情已返回 */
+    groupCode: item.teamCode || item.groupCode || '',
+    attribute: item.parentOrderId ? '子订单' : '—', // parentOrderId 已由列表/详情返回
+    bound: !!item.parentOrderId,
+    refunded: false,
+    mainOrderNo: item.parentOrderId ? String(item.parentOrderId) : '',
+    qrImg: item.qrImg || '',
+    depositTarget: item.depositTarget || '1000',
+    depositReason: item.depositReason || '',
+    depositFirst: item.depositFirst || '500',
+    depositSecond: item.depositSecond || '500',
+    depositImages: item.depositImages || [],
+    depositRemark: item.depositRemark || '',
+    proofFirst: item.proofFirst || '',
+    proofLast: item.proofLast || '',
+    proofProcess: item.proofProcess || [],
+    proofUploadTime: item.proofUploadTime || '',
+    playerRemark: item.playerRemark || '',
+    lastRejectReason: item.lastRejectReason || '',
+  };
 }
 
-/* ===== 编辑（依据原型：待派单/进行中-未提交展示；编辑表单含存单/二维码上传/复制） ===== */
+async function openDetail(row) {
+  try {
+    const [detail, logs] = await Promise.all([orderApi.detail(row.id), orderApi.logs(row.id)]);
+    detailRow.value = { ...mapDetail(detail), ...row };
+    detailLogs.value = (logs || []).map((l) => ({
+      time: l.createdAt || '',
+      text: l.content || '',
+      op: l.operatorName || '',
+      action: l.action || '',
+    }));
+    detailVisible.value = true;
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
+}
+
+/* ===== 编辑（接口：POST /{id}/maintain 维护订单信息；原型其余字段待后端补充） ===== */
 const editVisible = ref(false);
 const editRow = ref(null);
+const editLogs = ref([]);
 const editDialogRef = ref(null);
 
-function openEdit(row) {
+async function openEdit(row) {
   editRow.value = row;
+  editLogs.value = [];
   editVisible.value = true;
+  try {
+    // 详情+日志：为编辑弹窗的打手信息/存单/凭证/日志区块补齐接口数据
+    const [detail, logs] = await Promise.all([orderApi.detail(row.id), orderApi.logs(row.id)]);
+    editRow.value = { ...mapDetail(detail), ...row };
+    editLogs.value = (logs || []).map((l) => ({
+      time: l.createdAt || '',
+      text: l.content || '',
+      op: l.operatorName || '',
+      action: l.action || '',
+    }));
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-function saveEdit(form) {
+async function saveEdit(form) {
   const row = editRow.value;
   if (!row) return;
-  Object.assign(row, {
-    claimerName: form.claimerName,
-    gameName: form.gameName,
-    spec: form.spec,
-    clientType: [...form.clientType],
-    orderType: form.orderType,
-    playerCount: Number(form.playerCount) || 0,
-    roleName: form.roleName,
-    groupCode: form.groupCode,
-    remark: form.remark,
-    qrImg: form.qrImg,
-    depositTarget: form.depositTarget,
-    depositReason: form.depositReason,
-    depositFirst: form.depositFirst,
-    depositSecond: form.depositSecond,
-    depositImages: [...form.depositImages],
-    depositRemark: form.depositRemark,
-  });
-  editVisible.value = false;
-  show('保存成功', 'success');
+  try {
+    // 组队码：maintain 已支持 teamCode（新 OpenAPI）；二维码/存单/凭证等字段接口未提供，暂不提交（本地保留）
+    await orderApi.maintain(row.id, {
+      gameId: form.gameId,
+      specId: form.specId,
+      clients: form.clients,
+      orderType: form.orderType,
+      playerCount: form.playerCount,
+      roleName: form.roleName,
+      teamCode: form.teamCode,
+      remark: form.remark,
+    });
+    // 领取人（所属客服）不在本弹窗修改：列表领取人列铅笔 → 独立弹窗调 PUT /{id}/owner
+    editVisible.value = false;
+    show('保存成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 新增订单 ===== */
+/* ===== 新增订单（接口：POST /api/admin/orders 人工新增订单；orderType/playerCount 字段接口未提供不提交） ===== */
 const addVisible = ref(false);
 const addForm = reactive({
   channel: '抖音',
@@ -284,22 +558,34 @@ const addForm = reactive({
   amount: '',
   product: '',
   clientType: [],
-  gameName: '',
-  spec: '',
+  gameId: '',
+  specId: '',
   orderType: '',
   playerCount: '',
+  shopId: '',
+  remark: '',
 });
 
 function openAdd() {
   Object.assign(addForm, {
     channel: '抖音', thirdOrderNo: '', amount: '', product: '',
-    clientType: [], gameName: '', spec: '', orderType: '', playerCount: '',
+    clientType: [], gameId: '', specId: '', orderType: '', playerCount: '',
+    shopId: '', remark: '',
   });
   addVisible.value = true;
 }
 
-function submitAdd() {
-  const { channel, thirdOrderNo, amount, product, clientType, gameName, spec } = addForm;
+const addSpecOptions = computed(() => specOptionsOf(addForm.gameId));
+const addChannelOptions = computed(() =>
+  CHANNEL_OPTIONS.map((item) => ({ label: item.label, value: item.label }))
+);
+const addChannelCode = computed(() => {
+  const hit = CHANNEL_OPTIONS.find((item) => item.label === addForm.channel);
+  return hit ? hit.value : addForm.channel;
+});
+
+async function submitAdd() {
+  const { channel, thirdOrderNo, amount, product, clientType, gameId, specId, shopId, remark } = addForm;
   if (!channel) return show('请选择所属渠道', 'warning');
   if (!thirdOrderNo.trim()) return show('请输入第三方订单号', 'warning');
   const amountNum = Number(amount);
@@ -307,51 +593,41 @@ function submitAdd() {
   if (!product.trim()) return show('请输入购买项目', 'warning');
   if (product.trim().length > 50) return show('购买项目不能超过50字', 'warning');
   if (!clientType.length) return show('请选择客户端', 'warning');
-  if (!gameName) return show('请选择游戏名称', 'warning');
-  if (!spec) return show('请选择游戏规格', 'warning');
+  if (!gameId) return show('请选择游戏名称', 'warning');
+  if (!specId) return show('请选择游戏规格', 'warning');
 
-  const maxNo = orderStore.orders.reduce((max, o) => Math.max(max, Number(o.orderNo) || 0), 2455600);
-  orderStore.orders.unshift({
-    id: `ord-${Date.now()}`,
-    orderNo: String(maxNo + 1),
-    thirdOrderNo: thirdOrderNo.trim(),
-    channel,
-    amount: amountNum,
-    product: product.trim(),
-    gameName,
-    spec,
-    clientType: [...clientType],
-    orderType: addForm.orderType || '常规单',
-    claimerCorp: CURRENT_USER.corp,
-    claimerName: CURRENT_USER.name,
-    auditStatus: '-',
-    attribute: '-',
-    tags: [],
-    roleName: '',
-    groupCode: '',
-    playerCount: addForm.playerCount ? Number(addForm.playerCount) : 0,
-    statusCount: '',
-    bound: false,
-    mainOrderNo: '',
-    frozen: false,
-    refunded: false,
-    rejectCount: 0,
-    remark: '',
-    status: '待派单',
-    createTime: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
-  });
-  addVisible.value = false;
-  show('新增成功', 'success');
+  try {
+    // 人工新增订单：create body 已支持 orderType/playerCount（后端确认），其余原型字段接口未提供不提交
+    await orderApi.create({
+      channelCode: addChannelCode.value,
+      shopId: String(shopId || '').trim(),
+      thirdOrderNo: thirdOrderNo.trim(),
+      amount: amountNum,
+      itemName: product.trim(),
+      clients: clientType.length ? clientType.join(',') : '',
+      gameId: Number(gameId),
+      specId: Number(specId),
+      orderType: addForm.orderType || 'NORMAL',
+      playerCount: addForm.playerCount !== '' && addForm.playerCount != null ? Number(addForm.playerCount) || 0 : undefined,
+      remark: String(remark || '').trim(),
+    });
+    addVisible.value = false;
+    show('新增成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 查看关系 ===== */
+/* ===== 查看关系（主/子单关系数据接口待后端补充；当前仅展示本订单） ===== */
 const relationVisible = ref(false);
 const relationRow = ref(null);
 const relationData = ref({ main: null, children: [] });
 
 function openRelation(row) {
   relationRow.value = row;
-  relationData.value = getRelation(row);
+  // parentOrderId 已由列表/详情返回（主单号可直接展示）；子订单列表（children）数据接口待补充
+  relationData.value = { main: null, children: [] };
   relationVisible.value = true;
 }
 
@@ -363,84 +639,185 @@ const relationMainNo = computed(() => {
   return row.orderNo;
 });
 
-/* ===== 绑主单（待派单、未绑定；下拉选项：上行订单规格、下行订单编号） ===== */
+/* ===== 绑主单（接口：POST /{id}/bind，parentOrderId 必填） ===== */
 const bindVisible = ref(false);
 const bindRow = ref(null);
-const bindForm = reactive({ mainOrderNo: '' });
+const bindForm = reactive({ parentOrderId: '' });
+const bindCandidates = ref([]); // [{ id, orderNo, spec }]
 
-/** 可选主单候选：进行中/待接单/待派单，排除自身与已是他人子单的订单（联调时由接口返回可绑定主单列表） */
-const mainOptions = computed(() => {
-  const self = bindRow.value;
-  return orderStore.orders.filter((o) => {
-    if (!self || o.orderNo === self.orderNo) return false;
-    if (o.attribute === '子订单') return false;
-    return ['待派单', '待接单', '进行中'].includes(o.status);
-  });
-});
-
+/** 可绑主单候选：专用接口待后端补充（后端建议勿用 scope=ALL 硬筛），当前候选为空，等接口补齐后接入 */
 function openBindMain(row) {
   bindRow.value = row;
-  bindForm.mainOrderNo = '';
+  bindForm.parentOrderId = '';
+  bindCandidates.value = [];
   bindVisible.value = true;
 }
 
-function submitBindMain() {
+async function submitBindMain() {
   const row = bindRow.value;
   if (!row) return;
-  if (!bindForm.mainOrderNo) return show('请选择绑定主单', 'warning');
-  const main = orderStore.orders.find((o) => o.orderNo === bindForm.mainOrderNo);
-  if (!main) return;
-  row.attribute = '子订单';
-  row.mainOrderNo = main.orderNo;
-  row.bound = true;
-  main.bound = true;
-  bindVisible.value = false;
-  show('绑定成功', 'success');
+  if (!bindForm.parentOrderId) return show('请选择绑定主单', 'warning');
+  try {
+    await orderApi.bind(row.id, { parentOrderId: Number(bindForm.parentOrderId) });
+    bindVisible.value = false;
+    show('绑定成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 派单 ===== */
+/* ===== 解绑（接口：POST /{id}/unbind，单订单解绑；多选依赖主/子单关系接口待补充） ===== */
+const unbindVisible = ref(false);
+const unbindRow = ref(null);
+const unbindOptions = ref([]);
+const unbindSelected = ref([]);
+
+function openUnbind(row) {
+  unbindRow.value = row;
+  unbindSelected.value = [];
+  // parentOrderId 已返回：本订单为子订单时可列出主订单；子订单列表（children）接口待补充
+  const options = [];
+  if (row.attribute === '子订单' && row.mainOrderNo) {
+    options.push({ no: row.mainOrderNo, label: '主订单' });
+  }
+  options.push({ no: row.orderNo, label: '当前订单' });
+  unbindOptions.value = options;
+  unbindVisible.value = true;
+}
+
+async function submitUnbind() {
+  const row = unbindRow.value;
+  if (!row) return;
+  if (!unbindSelected.value.length) return show('请选择需要解绑的订单', 'warning');
+  try {
+    // 解绑接口当前为单订单（POST /{id}/unbind）；解绑 body 多选待后端补充，接入后按选中逐单解绑
+    await orderApi.unbind(row.id);
+    unbindVisible.value = false;
+    show('解绑成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
+}
+
+/* ===== 派单（系统派单=SYSTEM 大厅；人工派单=CLUB 指定俱乐部并指派打手） =====
+ * 打手列表：GET /api/admin/players?clubId={俱乐部}&status=NORMAL&pageSize=100，下拉展示 姓名(id)，值为 playerId
+ * 指派：POST /api/club/orders/{orderId}/assignments { slots:[{slotNo, playerId}] }（管理端前缀以后端契约为准）
+ */
 const dispatchVisible = ref(false);
 const dispatchRow = ref(null);
 const dispatchForm = reactive({ dispatchType: '系统派单', club: '', players: [], remark: '' });
+const clubOptions = ref([]); // [{ id, name }]
+const playerOptions = ref([]); // [{ id, name }]
+const dispatchLoading = ref(false);
+const playersLoading = ref(false);
 
-function openDispatch(row) {
+async function loadClubOptions() {
+  if (clubOptions.value.length) return;
+  try {
+    const res = await clubApi.list({ page: 1, pageSize: 100 });
+    clubOptions.value = ((res && res.list) || []).map((c) => ({
+      id: c.id,
+      name: c.name || c.clubName || String(c.id),
+    }));
+  } catch {
+    clubOptions.value = [];
+  }
+}
+
+/** 按所选俱乐部拉取正常状态打手，下拉展示 姓名(id)，值为 playerId */
+async function loadPlayers(clubId) {
+  playerOptions.value = [];
+  if (!clubId) return;
+  playersLoading.value = true;
+  try {
+    const res = await playerApi.list({ clubId: Number(clubId), status: 'NORMAL', pageSize: 100 });
+    playerOptions.value = ((res && res.list) || []).map((p) => ({ id: p.id, name: p.name }));
+  } catch {
+    playerOptions.value = [];
+  } finally {
+    playersLoading.value = false;
+  }
+}
+
+// 人工派单：切换俱乐部联动刷新打手列表，并清空已选打手
+watch(
+  () => dispatchForm.club,
+  (val) => {
+    dispatchForm.players = dispatchForm.players.map(() => '');
+    loadPlayers(val);
+  }
+);
+
+async function openDispatch(row) {
   const missing = [];
-  if (!row.gameName) missing.push('游戏名称');
-  if (!row.orderType) missing.push('订单类型');
-  if (!row.spec) missing.push('游戏规格');
-  if (!row.playerCount) missing.push('打手人数');
-  if (!row.clientType || !row.clientType.length) missing.push('客户端');
-  if (!row.roleName) missing.push('角色名');
+  if (!row.gameId) missing.push('游戏名称');
+  if (!row.specId) missing.push('游戏规格');
+  if (!row.orderTypeCode) missing.push('订单类型');
+  if (!row.clients) missing.push('客户端');
+  // 角色名接口未返回，暂不参与派单前置校验（待后端补充）
   if (missing.length) {
     show(`该订单尚未维护${missing.join('/')}`, 'warning');
     return;
   }
   dispatchRow.value = row;
-  const count = Math.max(1, Number(row.playerCount) || 1);
-  Object.assign(dispatchForm, {
-    dispatchType: '系统派单',
-    club: '',
-    players: Array.from({ length: Math.min(count, 3) }, () => ''),
-    remark: '',
-  });
+  Object.assign(dispatchForm, { dispatchType: '系统派单', club: '', players: [], remark: '' });
+  playerOptions.value = [];
   dispatchVisible.value = true;
+  dispatchLoading.value = true;
+  try {
+    // 打手人数/锁定俱乐部从详情补齐
+    const detail = await orderApi.detail(row.id);
+    dispatchRow.value = {
+      ...row,
+      playerCount: detail.playerCount,
+      takenCount: detail.takenCount,
+      lockedClubId: detail.lockedClubId,
+    };
+    const count = Math.max(1, Number(detail.playerCount) || 1);
+    dispatchForm.players = Array.from({ length: Math.min(count, 3) }, () => '');
+    // 订单已锁定俱乐部则预填（watch 会联动拉打手）
+    if (detail.lockedClubId) dispatchForm.club = detail.lockedClubId;
+    await loadClubOptions();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  } finally {
+    dispatchLoading.value = false;
+  }
 }
 
-function submitDispatch() {
+async function submitDispatch() {
   const row = dispatchRow.value;
   if (!row) return;
-  if (dispatchForm.dispatchType === '人工派单') {
-    if (!dispatchForm.club) return show('请选择俱乐部', 'warning');
+  const dispatchType = dispatchForm.dispatchType === '系统派单' ? 'SYSTEM' : 'CLUB';
+  if (dispatchType === 'CLUB' && !dispatchForm.club) {
+    return show('请选择俱乐部', 'warning');
+  }
+  let slots = [];
+  if (dispatchType === 'CLUB') {
     const emptyIndex = dispatchForm.players.findIndex((p) => !p);
     if (emptyIndex > -1) return show(`请选择打手${emptyIndex + 1}`, 'warning');
+    slots = dispatchForm.players.map((playerId, i) => ({ slotNo: i + 1, playerId: Number(playerId) }));
   }
-  row.status = '待接单';
-  row.statusCount = `0/${row.playerCount || 1}`;
-  dispatchVisible.value = false;
-  show('派单成功', 'success');
+  try {
+    await orderApi.dispatch(row.id, {
+      dispatchType,
+      targetClubId: dispatchType === 'CLUB' ? Number(dispatchForm.club) : undefined,
+    });
+    // 人工派单：把选中打手指派到名额（slots: [{ slotNo, playerId }]）
+    if (dispatchType === 'CLUB' && slots.length) {
+      await orderApi.assign(row.id, { slots });
+    }
+    dispatchVisible.value = false;
+    show('派单成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 加减价 ===== */
+/* ===== 加减价（接口：POST /{id}/platform-adjust；UI 保持原型"加价/减价"文案） ===== */
 const priceVisible = ref(false);
 const priceRow = ref(null);
 const priceForm = reactive({ type: '加价', amount: '' });
@@ -451,7 +828,7 @@ function openPrice(row) {
   priceVisible.value = true;
 }
 
-function submitPrice() {
+async function submitPrice() {
   const row = priceRow.value;
   if (!row) return;
   const amount = Number(priceForm.amount);
@@ -461,113 +838,116 @@ function submitPrice() {
   if (amount > Number(row.amount)) {
     return show(`${priceForm.type === '加价' ? '加' : '减'}：最多为订单总金额`, 'warning');
   }
-  row.priceAdjust = { type: priceForm.type, amount };
-  priceVisible.value = false;
-  show('加减价成功', 'success');
+  try {
+    await orderApi.platformAdjust(row.id, {
+      direction: priceForm.type === '加价' ? 'INCREASE' : 'DECREASE',
+      amount,
+    });
+    priceVisible.value = false;
+    show('加减价成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 呼叫 ===== */
+/* ===== 呼叫（接口：POST /{id}/call，callType 必填；UI 保持原型类型选项） ===== */
 const callVisible = ref(false);
 const callRow = ref(null);
-const callForm = reactive({ type: '订单原因', remark: '' });
+const callForm = reactive({ type: '', remark: '' });
 
 function openCall(row) {
   callRow.value = row;
-  Object.assign(callForm, { type: '订单原因', remark: '' });
+  Object.assign(callForm, { type: '', remark: '' });
   callVisible.value = true;
 }
 
-function submitCall() {
+async function submitCall() {
   const row = callRow.value;
   if (!row) return;
   if (!callForm.type) return show('请选择呼叫类型', 'warning');
-  if (!(row.tags || []).includes('呼叫')) row.tags.push('呼叫');
-  callVisible.value = false;
-  show('呼叫成功', 'success');
+  try {
+    // body 优先 type（英文枚举 ORDER/COMPLAINT/PLAYER/TECH/OTHER），其次 callType（也接受中文）
+    await orderApi.call(row.id, { type: callForm.type, remark: callForm.remark });
+    callVisible.value = false;
+    show('呼叫成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 解绑 ===== */
-const unbindVisible = ref(false);
-const unbindRow = ref(null);
-const unbindOptions = ref([]);
-const unbindSelected = ref([]);
+/* ===== 修改领取客服（列表领取人列铅笔入口；仅管理员；接口：PUT /{id}/owner，ownerAccountId 必填。
+   客服列表接口待后端补充，当前先输入客服账号ID，列表接入后可换成下拉） ===== */
+const ownerVisible = ref(false);
+const ownerRow = ref(null);
+const ownerForm = reactive({ ownerAccountId: '' });
 
-function openUnbind(row) {
-  unbindRow.value = row;
-  const relation = getRelation(row);
-  const options = [];
-  if (row.attribute === '子订单' && row.mainOrderNo) {
-    options.push({ no: row.mainOrderNo, label: '主订单' });
-  }
-  if (row.attribute === '主订单') {
-    options.push({ no: row.orderNo, label: '主订单' });
-  }
-  relation.children.forEach((child) => {
-    options.push({ no: child.orderNo, label: '子订单' });
-  });
-  unbindOptions.value = options;
-  unbindSelected.value = [];
-  unbindVisible.value = true;
+function openOwnerEdit(row) {
+  ownerRow.value = row;
+  Object.assign(ownerForm, { ownerAccountId: '' });
+  ownerVisible.value = true;
 }
 
-function submitUnbind() {
-  const row = unbindRow.value;
+async function submitOwner() {
+  const row = ownerRow.value;
   if (!row) return;
-  if (!unbindSelected.value.length) return show('请选择需要解绑的订单', 'warning');
-
-  unbindSelected.value.forEach((no) => {
-    const target = orderStore.orders.find((o) => o.orderNo === no);
-    if (target) {
-      target.bound = false;
-      target.mainOrderNo = '';
-    }
-    if (row.orderNo === no) {
-      row.bound = false;
-      row.mainOrderNo = '';
-    }
-  });
-  unbindVisible.value = false;
-  show('解绑成功', 'success');
+  const n = Number(ownerForm.ownerAccountId);
+  if (!Number.isFinite(n) || n <= 0) return show('请输入正确的客服账号ID', 'warning');
+  try {
+    await orderApi.changeOwner(row.id, { ownerAccountId: n });
+    ownerVisible.value = false;
+    show('领取客服修改成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 冻结 / 解冻 / 回退（二次确认） ===== */
+/* ===== 冻结 / 解冻 / 回退（冻结/解冻走接口；回退接口待后端补充） ===== */
 async function freezeRow(row) {
   const ok = await confirm({ title: '冻结', message: `确定冻结订单 ${row.orderNo} 吗？冻结后打手无法操作该订单。`, okText: '确定' });
   if (!ok) return;
-  row.frozen = true;
-  if (!row.tags.includes('冻结')) row.tags.push('冻结');
-  show('冻结成功', 'success');
+  try {
+    await orderApi.freeze(row.id, { reason: 'MANUAL' });
+    show('冻结成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
 async function unfreezeRow(row) {
   const ok = await confirm({ title: '解冻', message: `确定解冻订单 ${row.orderNo} 吗？`, okText: '确定' });
   if (!ok) return;
-  row.frozen = false;
-  const idx = row.tags.indexOf('冻结');
-  if (idx > -1) row.tags.splice(idx, 1);
-  show('解冻成功', 'success');
+  try {
+    await orderApi.unfreeze(row.id);
+    show('解冻成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
 async function rollbackRow(row) {
   const ok = await confirm({ title: '回退', message: '进行二次确认，已接单人将被清除，订单回退为待派单。', okText: '确定' });
   if (!ok) return;
-  row.status = '待派单';
-  row.statusCount = '';
-  show('回退成功', 'success');
+  // 回退（待接单→待派单）接口待后端补充：确认后暂不生效，保持真实订单状态
+  show('回退接口待后端补充，暂未生效', 'warning');
 }
 
-/* ===== 退款 ===== */
+/* ===== 退款（接口：POST /{id}/refund 人工退款；原金额/部分退款展示依赖 refunded 字段接口待补充） ===== */
 const refundVisible = ref(false);
 const refundRow = ref(null);
-const refundForm = reactive({ amount: '' });
+const refundForm = reactive({ amount: '', reason: '' });
 
 function openRefund(row) {
   refundRow.value = row;
-  refundForm.amount = '';
+  Object.assign(refundForm, { amount: '', reason: '' });
   refundVisible.value = true;
 }
 
-function submitRefund() {
+async function submitRefund() {
   const row = refundRow.value;
   if (!row) return;
   const amount = Number(refundForm.amount);
@@ -577,17 +957,23 @@ function submitRefund() {
   if (amount > Number(row.amount)) {
     return show('退款金额不能超过订单总金额', 'warning');
   }
-  if (row.channel === '抖音') {
+  if (row.channelCode === 'DOUYIN') {
     return show('抖音订单不支持人工部分退款', 'warning');
   }
-  row.refunded = true;
-  row.refundAmount = amount;
-  if (!row.tags.includes('部分退款')) row.tags.push('部分退款');
-  refundVisible.value = false;
-  show('退款成功', 'success');
+  try {
+    await orderApi.refund(row.id, {
+      amount,
+      reason: String(refundForm.reason || '').trim(),
+    });
+    refundVisible.value = false;
+    show('退款成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 转单 ===== */
+/* ===== 转单（接口：POST /{id}/transfer；UI 保持原型目标文案，提交映射枚举） ===== */
 const transferVisible = ref(false);
 const transferRow = ref(null);
 const transferForm = reactive({ deduct: '否', amount: '', target: '进入公共抢单大厅' });
@@ -598,53 +984,67 @@ function openTransfer(row) {
   transferVisible.value = true;
 }
 
-function submitTransfer() {
+async function submitTransfer() {
   const row = transferRow.value;
   if (!row) return;
+  let deduct = 0;
   if (transferForm.deduct === '是') {
     const amount = Number(transferForm.amount);
     if (!transferForm.amount || !Number.isFinite(amount) || amount <= 0) {
       return show('请输入扣款金额（总数）', 'warning');
     }
+    deduct = amount;
   }
   if (!transferForm.target) return show('请选择转单类型', 'warning');
-  row.status = '待接单';
-  row.statusCount = `0/${row.playerCount || 1}`;
-  if (!row.tags.includes('转单')) row.tags.push('转单');
-  transferVisible.value = false;
-  show('转单成功', 'success');
+  try {
+    await orderApi.transfer(row.id, {
+      type: transferForm.target === '进入公共抢单大厅' ? 'PUBLIC' : 'CLUB_HALL',
+      deduct,
+    });
+    transferVisible.value = false;
+    show('转单成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-/* ===== 审核（信息展示 + 审核操作，由 AuditDialog 提交） ===== */
+/* ===== 审核（接口：POST /{id}/audit，pass 必填，驳回必填 reason） ===== */
 const auditVisible = ref(false);
 const auditRow = ref(null);
+const auditLogs = ref([]);
 const auditDialogRef = ref(null);
 
-function openAudit(row) {
+async function openAudit(row) {
   auditRow.value = row;
+  auditLogs.value = [];
   auditVisible.value = true;
+  try {
+    // 审核弹窗需展示分润信息（平台/俱乐部加减价、账期），先拉订单详情 + 日志
+    const [detail, logs] = await Promise.all([orderApi.detail(row.id), orderApi.logs(row.id)]);
+    auditRow.value = { ...mapDetail(detail), ...row };
+    auditLogs.value = (logs || []).map((l) => ({
+      time: l.createdAt || '',
+      text: l.content || '',
+      op: l.operatorName || '',
+      action: l.action || '',
+    }));
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-function submitAudit({ result, reason }) {
+async function submitAudit({ pass, reason }) {
   const row = auditRow.value;
   if (!row) return;
-  if (result === '通过') {
-    row.status = '已完成';
-    row.auditStatus = '-';
+  try {
+    await orderApi.audit(row.id, { pass, reason });
     auditVisible.value = false;
-    show('审核通过，订单已完成', 'success');
-    return;
+    show(pass ? '审核通过，订单已完成' : '已驳回', pass ? 'success' : 'warning');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
   }
-  row.auditStatus = '已驳回';
-  row.rejectCount = (row.rejectCount || 0) + 1;
-  row.lastRejectReason = reason;
-  if (row.rejectCount >= 2) {
-    if (!row.tags.includes('冻结')) row.tags.push('冻结');
-    show('审核已驳回，被驳回两次订单已自动冻结', 'warning');
-  } else {
-    show('已驳回', 'warning');
-  }
-  auditVisible.value = false;
 }
 </script>
 
@@ -668,19 +1068,18 @@ function submitAudit({ result, reason }) {
       :total="total"
       :page="page"
       :page-size="pageSize"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
+      @page-change="(p) => { onPageChange(p); fetchList(); }"
+      @page-size-change="(s) => { onPageSizeChange(s); fetchList(); }"
     >
       <template #toolbar>
         <div class="toolbar-left">
-          <!-- <h2 class="list-title">订单列表</h2> -->
           <div class="scope-switch">
             <button
               v-for="item in scopeOptions"
               :key="item.value"
               type="button"
               :class="['scope-btn', { active: scope === item.value }]"
-              @click="scope = item.value; page = 1"
+              @click="switchScope(item.value)"
             >
               {{ item.label }}
             </button>
@@ -706,11 +1105,19 @@ function submitAudit({ result, reason }) {
 
       <template #cell-amount="{ row }">{{ money(row.amount) }}</template>
 
-      <template #cell-clientType="{ row }">{{ row.clientType.length ? row.clientType.join('、') : '—' }}</template>
+      <template #cell-product="{ row }">{{ row.product || '—' }}</template>
+
+      <template #cell-gameName="{ row }">{{ row.gameName || '—' }}</template>
+
+      <template #cell-clientType="{ row }">{{ row.clients ? row.clients.split(/[,，]/).filter(Boolean).join('、') : '—' }}</template>
+
+      <template #cell-spec="{ row }">{{ row.spec || '—' }}</template>
+
+      <template #cell-roleName="{ row }">{{ row.roleName || '—' }}</template>
 
       <template #cell-status="{ row }">
         <div class="status-wrap">
-          <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ statusText(row) }}</span>
+          <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ displayStatus(row) }}</span>
           <span v-for="tag in row.tags" :key="tag" class="order-tag" :class="`tag-${tagClass(tag)}`">{{ tag }}</span>
         </div>
       </template>
@@ -727,7 +1134,7 @@ function submitAudit({ result, reason }) {
       </template>
 
       <template #cell-attribute="{ row }">
-        <div v-if="row.attribute !== '-'" class="attr-cell">
+        <div v-if="row.attribute !== '—'" class="attr-cell">
           <span>{{ row.attribute }}</span>
           <button class="link-btn" @click="openRelation(row)">查看关系</button>
         </div>
@@ -736,10 +1143,16 @@ function submitAudit({ result, reason }) {
 
       <template #cell-claimer="{ row }">
         <div class="claimer-cell">
-          <span>企微名：{{ row.claimerCorp }}</span>
-          <span>客服名：{{ row.claimerName }}</span>
+          <span>企微名：{{ row.claimerCorp || '—' }}</span>
+          <span class="claimer-name">
+            客服名：{{ row.claimerName || '—' }}
+            <!-- 仅管理员可编辑修改领取客服（原型标注）：列表行内铅笔 → 独立弹窗 PUT /{id}/owner -->
+            <button v-if="isAdmin" class="owner-edit-btn" type="button" title="修改领取客服" @click="openOwnerEdit(row)">✎</button>
+          </span>
         </div>
       </template>
+
+      <template #cell-createTime="{ row }">{{ row.createTime || '—' }}</template>
 
       <template #cell-op="{ row }">
         <div class="action-group">
@@ -760,32 +1173,30 @@ function submitAudit({ result, reason }) {
       </template>
     </DataTable>
 
-    <!-- <p class="perm-hint">仅管理员可编辑修改领取客服</p> -->
-
-    <!-- 查看详情（只读） -->
-    <AppModal v-model="detailVisible" :title="`${''} · 查看`" width="720px">
-      <OrderDetailDialog v-if="detailRow" :row="detailRow" />
+    <!-- 查看详情（接口：detail + logs） -->
+    <AppModal v-model="detailVisible" title="查看" width="720px">
+      <OrderDetailDialog v-if="detailRow" :row="detailRow" :logs="detailLogs" />
       <template #footer>
         <button class="btn btn-primary" @click="detailVisible = false">确定</button>
       </template>
     </AppModal>
 
-    <!-- 编辑（待派单 / 进行中-未提交） -->
-    <AppModal v-model="editVisible" :title="`${''} · 编辑`" width="760px">
-      <OrderEditDialog v-if="editRow" ref="editDialogRef" :row="editRow" @save="saveEdit" />
+    <!-- 编辑（维护订单信息 maintain；原型其余字段接口待补充） -->
+    <AppModal v-model="editVisible" title="编辑" width="760px">
+      <OrderEditDialog v-if="editRow" ref="editDialogRef" :row="editRow" :catalog="catalog" :logs="editLogs" @save="saveEdit" />
       <template #footer>
         <button class="btn btn-plain" @click="editVisible = false">取消</button>
         <button class="btn btn-primary" @click="editDialogRef?.submit()">确定</button>
       </template>
     </AppModal>
 
-    <!-- 新增订单 -->
+    <!-- 新增订单（人工新增订单 create；订单类型/打手人数字段接口未提供） -->
     <AppModal v-model="addVisible" title="新增数据" width="520px">
       <div class="dialog-form">
         <div class="form-row">
           <label class="required">所属渠道</label>
           <el-select v-model="addForm.channel" style="width: 100%">
-            <el-option v-for="item in CHANNELS" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in addChannelOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </div>
         <div class="form-row">
@@ -808,25 +1219,34 @@ function submitAudit({ result, reason }) {
         </div>
         <div class="form-row">
           <label class="required">游戏名称</label>
-          <el-select v-model="addForm.gameName" style="width: 100%" placeholder="请选择游戏">
-            <el-option v-for="item in GAME_OPTIONS" :key="item" :label="item" :value="item" />
+          <el-select v-model="addForm.gameId" style="width: 100%" placeholder="请选择游戏" @change="addForm.specId = ''">
+            <el-option v-for="item in gameOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </div>
         <div class="form-row">
           <label class="required">游戏规格</label>
-          <el-select v-model="addForm.spec" style="width: 100%" placeholder="请选择规格">
-            <el-option v-for="item in SPEC_OPTIONS" :key="item" :label="item" :value="item" />
+          <el-select v-model="addForm.specId" style="width: 100%" placeholder="请选择规格">
+            <el-option v-for="item in addSpecOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
+        </div>
+        <div class="form-row">
+          <label>店铺ID</label>
+          <input v-model="addForm.shopId" placeholder="请输入店铺ID" />
         </div>
         <div class="form-row">
           <label>订单类型</label>
           <el-radio-group v-model="addForm.orderType">
-            <el-radio v-for="item in TYPE_OPTIONS" :key="item" :value="item">{{ item }}</el-radio>
+            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.label">{{ item.label }}</el-radio>
           </el-radio-group>
         </div>
         <div class="form-row">
           <label>打手人数</label>
           <input v-model="addForm.playerCount" type="number" min="0" step="1" placeholder="仅支持输入整数" />
+        </div>
+        <div class="form-row">
+          <label>备注</label>
+          <textarea v-model="addForm.remark" rows="3" maxlength="200" placeholder="可粘贴识别原文，上限200字"></textarea>
+          <div class="char-count">{{ addForm.remark.length }}/200</div>
         </div>
       </div>
       <template #footer>
@@ -835,7 +1255,7 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 查看关系 -->
+    <!-- 查看关系（parentOrderId 已返回；子订单列表数据待补充） -->
     <AppModal v-model="relationVisible" title="查看关系" width="480px">
       <div class="relation-dialog">
         <div class="relation-row">
@@ -846,7 +1266,7 @@ function submitAudit({ result, reason }) {
           <span>子订单</span>
           <div class="relation-list">
             <strong v-for="child in relationData.children" :key="child.orderNo">{{ child.orderNo }}</strong>
-            <span v-if="!relationData.children.length" class="muted-text">暂无子订单</span>
+            <span v-if="!relationData.children.length" class="muted-text">暂无子订单（子订单列表数据接口待后端补充）</span>
           </div>
         </div>
       </div>
@@ -855,7 +1275,7 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 绑主单：当前订单只读；绑定主单必填，选项上行规格、下行订单号 -->
+    <!-- 绑主单（接口：bind） -->
     <AppModal v-model="bindVisible" title="绑主单" width="480px">
       <div class="dialog-form">
         <div class="form-row">
@@ -864,14 +1284,15 @@ function submitAudit({ result, reason }) {
         </div>
         <div class="form-row">
           <label class="required">绑定主单</label>
-          <el-select v-model="bindForm.mainOrderNo" placeholder="请选择主订单" style="width: 100%" filterable>
-            <el-option v-for="opt in mainOptions" :key="opt.orderNo" :value="opt.orderNo" :label="`${opt.spec || '未维护规格'} ${opt.orderNo}`">
+          <el-select v-model="bindForm.parentOrderId" placeholder="请选择主订单" style="width: 100%" filterable>
+            <el-option v-for="opt in bindCandidates" :key="opt.id" :value="opt.id" :label="`${opt.spec || '未维护规格'} ${opt.orderNo}`">
               <div class="bind-option">
                 <span class="bind-option__spec">{{ opt.spec || '未维护规格' }}</span>
                 <span class="bind-option__no">{{ opt.orderNo }}</span>
               </div>
             </el-option>
           </el-select>
+          <!-- <p class="form-tip">可绑主单候选接口待后端补充（后端建议勿用全部订单列表硬筛），当前暂无候选可选。</p> -->
         </div>
       </div>
       <template #footer>
@@ -880,7 +1301,25 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 派单 -->
+    <!-- 解绑（unbind 单订单接口；多选依赖主/子单关系接口待补充） -->
+    <AppModal v-model="unbindVisible" title="解绑" width="520px">
+      <div class="dialog-form">
+        <div class="form-row">
+          <label>选择要解绑的订单</label>
+          <el-checkbox-group v-model="unbindSelected" class="checkbox-col">
+            <el-checkbox v-for="opt in unbindOptions" :key="opt.no" :value="opt.no">
+              {{ opt.label }}：{{ opt.no }}（当前订单号：{{ unbindRow?.orderNo }}）
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn btn-plain" @click="unbindVisible = false">取消</button>
+        <button class="btn btn-primary" @click="submitUnbind">确定</button>
+      </template>
+    </AppModal>
+
+    <!-- 派单（接口：dispatch；打手名单/备注字段接口未提供） -->
     <AppModal v-model="dispatchVisible" title="派单" width="520px">
       <div class="dialog-form">
         <div class="form-row">
@@ -897,25 +1336,44 @@ function submitAudit({ result, reason }) {
         <template v-if="dispatchForm.dispatchType === '人工派单'">
           <div class="form-row">
             <label class="required">选择俱乐部</label>
-            <el-select v-model="dispatchForm.club" placeholder="请选择俱乐部" style="width: 100%">
-              <el-option v-for="item in CLUB_OPTIONS" :key="item" :label="item" :value="item" />
+            <el-select
+              v-model="dispatchForm.club"
+              filterable
+              :loading="dispatchLoading"
+              placeholder="请选择俱乐部"
+              style="width: 100%"
+            >
+              <el-option v-for="item in clubOptions" :key="item.id" :label="item.name" :value="item.id" />
             </el-select>
           </div>
-          <div v-for="(_, index) in dispatchForm.players" :key="index" class="form-row">
+          <div v-if="!dispatchForm.club" class="form-row">
+            <label>打手列表</label>
+            <p class="form-tip">请先选择俱乐部，再按俱乐部拉取正常状态打手。</p>
+          </div>
+          <div v-for="(_, index) in dispatchForm.players" v-else :key="index" class="form-row">
             <label class="required">打手{{ index + 1 }}</label>
-            <el-select v-model="dispatchForm.players[index]" placeholder="请选择打手" style="width: 100%">
-              <el-option v-for="item in PLAYER_OPTIONS" :key="item" :label="item" :value="item" />
+            <el-select
+              v-model="dispatchForm.players[index]"
+              :loading="playersLoading"
+              filterable
+              placeholder="请选择打手（姓名 id）"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="item in playerOptions"
+                :key="item.id"
+                :label="`${item.name}（${item.id}）`"
+                :value="item.id"
+              />
             </el-select>
           </div>
-          <!-- <p class="form-tip">
-            人工派单：1、平台只派到俱乐部维度；2、订单超过卡单时长，不退回到抢单大厅，还在该俱乐部下；3、退店状态、不符合游戏规格条件的俱乐部不支持选择。
-          </p> -->
         </template>
         <div class="form-row">
           <label>备注</label>
           <textarea v-model="dispatchForm.remark" rows="3" maxlength="200" placeholder="请输入备注"></textarea>
           <div class="char-count">{{ dispatchForm.remark.length }}/200</div>
         </div>
+        <!-- <p class="form-tip">打手名单与备注字段接口暂未提供，提交时仅携带派单类型与目标俱乐部（待后端补充）。</p> -->
       </div>
       <template #footer>
         <button class="btn btn-plain" @click="dispatchVisible = false">取消</button>
@@ -923,10 +1381,9 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 加减价 -->
+    <!-- 加减价（接口：platform-adjust） -->
     <AppModal v-model="priceVisible" title="加减价" width="440px">
       <div class="dialog-form">
-        <!-- <p class="form-tip">待派单状态下可修改；注意部分退款不支持加减价。</p> -->
         <div class="form-row">
           <label class="required">选择加减价</label>
           <el-radio-group v-model="priceForm.type">
@@ -938,7 +1395,6 @@ function submitAudit({ result, reason }) {
           <label class="required">金额(元)</label>
           <input v-model="priceForm.amount" type="number" step="0.01" min="0" placeholder="仅支持正数，最多两位小数" />
         </div>
-        <!-- <p class="form-tip">加：最多为订单总金额　减：最多为订单总金额</p> -->
       </div>
       <template #footer>
         <button class="btn btn-plain" @click="priceVisible = false">取消</button>
@@ -946,16 +1402,16 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 呼叫 -->
+    <!-- 呼叫（接口：call） -->
     <AppModal v-model="callVisible" title="呼叫" width="440px">
       <div class="dialog-form">
         <div class="form-row">
           <label class="required">类型</label>
           <el-select v-model="callForm.type" style="width: 100%">
-            <el-option v-for="item in CALL_TYPE_OPTIONS" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in CALL_TYPE_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
+          <!-- <p class="form-tip">呼叫类型文案已对齐后端枚举：订单问题/投诉/打手问题/技术问题/其他（提交英文枚举）。</p> -->
         </div>
-        <!-- <p class="form-tip">类型包含：1、订单原因　2、老板投诉　3、打手问题　4、技术问题　5、其他</p> -->
         <div class="form-row">
           <label>备注</label>
           <textarea v-model="callForm.remark" rows="3" maxlength="200" placeholder="请输入备注"></textarea>
@@ -968,26 +1424,26 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 解绑 -->
-    <AppModal v-model="unbindVisible" title="解绑" width="520px">
+    <!-- 修改领取客服（列表领取人列铅笔入口；仅管理员；PUT /{id}/owner） -->
+    <AppModal v-model="ownerVisible" title="修改领取客服" width="440px">
       <div class="dialog-form">
         <div class="form-row">
-          <label>选择要解绑的订单</label>
-          <el-checkbox-group v-model="unbindSelected" class="checkbox-col">
-            <el-checkbox v-for="opt in unbindOptions" :key="opt.no" :value="opt.no">
-              {{ opt.label }}：{{ opt.no }}（当前订单号：{{ unbindRow?.orderNo }}）
-            </el-checkbox>
-          </el-checkbox-group>
+          <label>当前客服</label>
+          <strong>{{ ownerRow ? `${ownerRow.claimerName || '—'}（${ownerRow.claimerCorp || '—'}）` : '—' }}</strong>
         </div>
-        <!-- <p class="form-tip">解绑弹框中，在对应的订单号后面拼上当前订单号（告知操作人当前订单是哪个）。</p> -->
+        <div class="form-row">
+          <label class="required">客服账号ID</label>
+          <input v-model="ownerForm.ownerAccountId" type="number" min="0" step="1" placeholder="请输入新领取客服的账号ID" />
+          <!-- <p class="form-tip">客服列表接口待后端补充，当前先输入客服账号ID；保存即调 PUT /{id}/owner。</p> -->
+        </div>
       </div>
       <template #footer>
-        <button class="btn btn-plain" @click="unbindVisible = false">取消</button>
-        <button class="btn btn-primary" @click="submitUnbind">确定</button>
+        <button class="btn btn-plain" @click="ownerVisible = false">取消</button>
+        <button class="btn btn-primary" @click="submitOwner">确定</button>
       </template>
     </AppModal>
 
-    <!-- 退款 -->
+    <!-- 退款（接口：refund） -->
     <AppModal v-model="refundVisible" title="退款" width="440px">
       <div class="dialog-form">
         <div class="form-row">
@@ -1009,7 +1465,11 @@ function submitAudit({ result, reason }) {
             <span>元</span>
           </div>
         </div>
-        <!-- <p class="form-tip">一笔订单仅支持退款一次；涉及部分退款时加减价失效；抖音订单不支持人工部分退款。</p> -->
+        <div class="form-row">
+          <label>退款原因</label>
+          <textarea v-model="refundForm.reason" rows="3" maxlength="200" placeholder="请输入退款原因（可选）"></textarea>
+          <div class="char-count">{{ refundForm.reason.length }}/200</div>
+        </div>
       </div>
       <template #footer>
         <button class="btn btn-plain" @click="refundVisible = false">取消</button>
@@ -1017,7 +1477,7 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 转单 -->
+    <!-- 转单（接口：transfer） -->
     <AppModal v-model="transferVisible" title="转单" width="480px">
       <div class="dialog-form">
         <div class="form-row">
@@ -1045,7 +1505,6 @@ function submitAudit({ result, reason }) {
             <el-radio value="进入当前俱乐部">进入当前俱乐部</el-radio>
           </el-radio-group>
         </div>
-        <!-- <p class="form-tip">订单重新转为待接单状态；进入公共抢单 → 公共抢单大厅；进入当前俱乐部 → 当前俱乐部抢单大厅；需要打上标签。</p> -->
       </div>
       <template #footer>
         <button class="btn btn-plain" @click="transferVisible = false">取消</button>
@@ -1053,9 +1512,9 @@ function submitAudit({ result, reason }) {
       </template>
     </AppModal>
 
-    <!-- 审核（分润信息/日志/凭证 + 审核操作） -->
+    <!-- 审核（接口：audit，pass/reason） -->
     <AppModal v-model="auditVisible" title="审核" width="620px">
-      <AuditDialog v-if="auditRow" ref="auditDialogRef" :row="auditRow" @submit="submitAudit" />
+      <AuditDialog v-if="auditRow" ref="auditDialogRef" :row="auditRow" :logs="auditLogs" @submit="submitAudit" />
       <template #footer>
         <button class="btn btn-plain" @click="auditVisible = false">取消</button>
         <button class="btn btn-primary" @click="auditDialogRef?.submit()">确定</button>
@@ -1065,10 +1524,6 @@ function submitAudit({ result, reason }) {
 </template>
 
 <style scoped>
-/* .order-list-tab {
-  gap: 12px;
-} */
-
 .toolbar-left {
   display: flex;
   align-items: center;
@@ -1248,7 +1703,8 @@ function submitAudit({ result, reason }) {
 .attr-cell {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  white-space: nowrap;
 }
 
 .claimer-cell {
@@ -1259,6 +1715,26 @@ function submitAudit({ result, reason }) {
   color: var(--text-main);
   line-height: 1.5;
   white-space: nowrap;
+}
+
+.claimer-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.owner-edit-btn {
+  border: none;
+  background: transparent;
+  color: var(--brand-color, #409eff);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.owner-edit-btn:hover {
+  opacity: 0.8;
 }
 
 .action-group {
@@ -1296,14 +1772,6 @@ function submitAudit({ result, reason }) {
 .link-btn.warning:hover { background: rgba(217, 119, 6, 0.08); }
 .link-btn.info { color: #1d4ed8; }
 .link-btn.info:hover { background: rgba(29, 78, 216, 0.08); }
-
-.perm-hint {
-  flex: 0 0 auto;
-  margin: 0;
-  text-align: right;
-  font-size: 12px;
-  color: #8a93a6;
-}
 
 /* ===== 弹窗通用 ===== */
 .dialog-form {
@@ -1355,7 +1823,6 @@ function submitAudit({ result, reason }) {
   min-height: 76px;
 }
 
-/* 弹窗内 el-select 与原生输入框统一圆角/内边距/高度，多选框随内容增高 */
 .dialog-form :deep(.el-select) {
   width: 100%;
 }
@@ -1372,7 +1839,6 @@ function submitAudit({ result, reason }) {
   line-height: 34px;
 }
 
-/* 单选组：横向均匀排布、与控件基线对齐 */
 .dialog-form :deep(.el-radio-group) {
   display: flex;
   flex-wrap: wrap;
@@ -1384,6 +1850,12 @@ function submitAudit({ result, reason }) {
 .dialog-form :deep(.el-radio) {
   margin-right: 0;
   height: 30px;
+}
+
+.checkbox-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .amount-input {
@@ -1404,64 +1876,42 @@ function submitAudit({ result, reason }) {
   font-variant-numeric: tabular-nums;
 }
 
+/* 查看关系弹窗 */
+.relation-dialog {
+  display: grid;
+  gap: 16px;
+}
+
+.relation-row {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.relation-row > span {
+  flex: 0 0 64px;
+  color: var(--text-sub);
+  font-size: 12.5px;
+}
+
+.relation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
 .form-tip {
   margin: 0;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 10px;
   background: rgba(250, 204, 21, 0.1);
   border: 1px solid rgba(250, 204, 21, 0.28);
   color: var(--warning-text);
   font-size: 12px;
   line-height: 1.8;
-}
-
-.muted-text {
-  color: var(--text-faint);
-}
-
-.checkbox-col {
-  display: grid;
-  gap: 6px;
-}
-
-.checkbox-col :deep(.el-checkbox) {
-  height: auto;
-  margin-right: 0;
-  white-space: normal;
-}
-
-/* ===== 查看关系 ===== */
-.relation-dialog {
-  display: grid;
-  gap: 14px;
-}
-
-.relation-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.relation-row > span {
-  flex: 0 0 70px;
-  color: var(--text-sub);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.relation-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.relation-list strong {
-  padding: 4px 12px;
-  border-radius: 8px;
-  background: var(--primary-soft);
-  color: var(--primary);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ===== 底部按钮 ===== */

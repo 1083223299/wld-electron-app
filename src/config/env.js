@@ -47,8 +47,8 @@ export const environments = {
 
   [ENV_NAMES.TEST]: {
     name: '测试',
-    apibaseURL: 'https://api.weilaidong.com/testapi',
-    uplobaseURL: 'https://api.weilaidong.com/testapi/common/file/upload',
+    apibaseURL: 'http://sys.test.weilaidong.com/wld-dj',
+    uplobaseURL: 'http://sys.test.weilaidong.com/wld-dj/common/file/upload',
     websocketURL: 'wss://test-ws.myapp.com',
     timeout: 10000,
     useMock: false,

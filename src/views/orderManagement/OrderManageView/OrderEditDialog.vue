@@ -1,52 +1,68 @@
 <script setup>
 import { computed, reactive, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
-import { useUserStore } from '../../../stores/user';
-import {
-  CURRENT_USER,
-  GAME_OPTIONS,
-  SPEC_OPTIONS,
-  CLIENT_OPTIONS,
-  TYPE_OPTIONS,
-  getOrderLogs,
-  STATUS_CLASS,
-} from './mockData';
+import { TYPE_OPTIONS, slotSourceText } from '../../../api/modules/order';
+import { CLIENT_OPTIONS, STATUS_CLASS } from './mockData';
 
 /**
- * 订单编辑弹窗内容
- * 依据原型「待派单编辑页 / 进行中编辑页」：
- * - 所属客服（仅管理员可改）
- * - 订单信息（游戏名称/游戏规格/客户端/订单类型/打手人数/角色名/组队码 可编辑；订单号/第三方订单号/角色名/组队码 支持复制）
- * - 企鹅群二维码（上传图片）
- * - 存单（进行中展示：保底目标/存单原因/第一把/第二把/剩余保底截图 上传最多5张；非三角洲展示存单备注）
- * - 打手信息 / 分成信息 / 订单日志 / 完成凭证 / 订单备注(0/200)
+ * 订单编辑弹窗内容（接口联调 + 原型 UI 恢复，依据最新 OpenAPI 2026-10-20）
+ * 保存接口：POST /api/admin/orders/{id}/maintain 维护订单信息
+ * 支持字段：gameId / specId / clients / orderType / playerCount / roleName / teamCode / remark
+ * - 所属客服（领取人）：本弹窗只读展示，不在此修改；修改入口在列表「领取人」列行内铅笔，
+ *   独立弹窗调 PUT /{id}/owner（仅管理员）
+ * - 组队码 teamCode：maintain 已支持（新 OpenAPI），随保存提交
+ * - 仍缺（保留原型 UI，本地展示/编辑、提交不携带，待后端补充）：
+ *   企鹅群二维码、存单（押金单/保底截图）、完成凭证、陪玩备注、派单打手名单
+ * - 打手信息来自 slots（名额列表：slotNo/playerId/source），接单/转单时间字段接口未提供
  */
 const props = defineProps({
   row: { type: Object, required: true },
+  catalog: { type: Array, default: () => [] }, // [{ id, name, specs: [{ id, name }] }]
+  logs: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['save']);
 
 const { show } = useToast();
-const userStore = useUserStore();
 
 const money = (value) => (Number(value) || 0).toFixed(2);
 
-/** 管理员可全量编辑；客服仅可编辑存单（原型批注）。登录角色联动，fallback 到 mock 常量 */
-const isAdmin = computed(() => (userStore.role || CURRENT_USER.role) === 'admin');
+const gameOptions = computed(() => props.catalog.map((g) => ({ label: g.name, value: g.id })));
+
+const specOptions = computed(() => {
+  const game = props.catalog.find((g) => g.id === Number(form.gameId));
+  return game ? game.specs.map((s) => ({ label: s.name, value: s.id })) : [];
+});
+
 const isProgress = computed(() => props.row.status === '进行中');
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
 
+const players = computed(() =>
+  (props.row.slots || []).map((s) => ({
+    slotNo: s.slotNo,
+    playerId: s.playerId,
+    source: slotSourceText(s.source),
+  }))
+);
+
+/** 加减价净值展示：减价为负 */
+const adjustText = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return '0.00元';
+  return `${n > 0 ? '+' : '-'}${money(Math.abs(n))}元`;
+};
+
 const form = reactive({
-  claimerName: '',
-  gameName: '',
-  spec: '',
-  clientType: [],
+  gameId: '',
+  specId: '',
+  clients: [],
   orderType: '',
   playerCount: 1,
   roleName: '',
-  groupCode: '',
+  teamCode: '', // 组队码：maintain 已支持（新 OpenAPI），随保存提交
   remark: '',
+  /* ---- 以下字段接口未提供：本地展示/编辑，提交不携带（待后端补充） ---- */
   qrImg: '',
   depositTarget: '1000',
   depositReason: '',
@@ -61,14 +77,13 @@ watch(
   (row) => {
     if (!row) return;
     Object.assign(form, {
-      claimerName: row.claimerName || '',
-      gameName: row.gameName || '',
-      spec: row.spec || '',
-      clientType: [...(row.clientType || [])],
-      orderType: row.orderType || '',
-      playerCount: row.playerCount || 1,
+      gameId: row.gameId ?? '',
+      specId: row.specId ?? '',
+      clients: row.clients ? String(row.clients).split(/[,，]/).filter(Boolean) : [],
+      orderType: row.orderTypeCode || 'NORMAL',
+      playerCount: row.playerCount != null ? Number(row.playerCount) : 1,
       roleName: row.roleName || '',
-      groupCode: row.groupCode || '',
+      teamCode: row.teamCode || row.groupCode || '',
       remark: row.remark || '',
       qrImg: row.qrImg || '',
       depositTarget: row.depositTarget || '1000',
@@ -81,24 +96,6 @@ watch(
   },
   { immediate: true, deep: true }
 );
-
-/** 打手信息：打手接单后展示 */
-const players = computed(() => {
-  const row = props.row;
-  if (row.status === '待派单') return [];
-  return [
-    { name: '张三 (1216516)', club: '李四俱乐部', time: '2026-10-10 11:12:22', type: '接单时间' },
-    { name: '赵六 (1216516)', club: '李四俱乐部', time: '2026-10-10 11:12:22', type: '转单时间' },
-  ];
-});
-
-const logs = computed(() => getOrderLogs(props.row));
-
-const adjustText = computed(() => {
-  const a = props.row.platformAdjust || props.row.priceAdjust;
-  if (!a || !a.amount) return '—';
-  return `${a.type === '加价' ? '+' : '-'}${money(a.amount)}元`;
-});
 
 /* ===== 复制 ===== */
 async function copyText(text) {
@@ -118,7 +115,7 @@ async function copyText(text) {
   show('已复制', 'success');
 }
 
-/* ===== 图片上传（本地 mock：FileReader → base64 回显） ===== */
+/* ===== 图片上传（本地 FileReader → base64 回显；接口未提供上传，提交不携带） ===== */
 function readAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -135,7 +132,7 @@ async function uploadSingle(e) {
   const dataUrl = await readAsDataUrl(file);
   form.qrImg = dataUrl;
   e.target.value = '';
-  show('图片已上传', 'success');
+  show('图片已上传（仅本地展示，上传接口待后端补充）', 'success');
 }
 
 async function uploadDeposit(e) {
@@ -149,7 +146,7 @@ async function uploadDeposit(e) {
     form.depositImages.push(await readAsDataUrl(file));
   }
   e.target.value = '';
-  if (list.length) show(`已上传${list.length}张`, 'success');
+  if (list.length) show(`已上传${list.length}张（仅本地展示）`, 'success');
 }
 
 function removeDeposit(index) {
@@ -157,7 +154,19 @@ function removeDeposit(index) {
 }
 
 function submit() {
-  emit('save', { ...form });
+  if (!form.gameId) return show('请选择游戏名称', 'warning');
+  if (!form.specId) return show('请选择游戏规格', 'warning');
+  // 提交维护接口支持的字段（含 teamCode）；二维码/存单/凭证等字段接口未提供，提交不携带（待后端补充）
+  emit('save', {
+    gameId: Number(form.gameId),
+    specId: Number(form.specId),
+    clients: form.clients.length ? form.clients.join(',') : '',
+    orderType: form.orderType,
+    playerCount: Number(form.playerCount) || 0,
+    roleName: String(form.roleName || '').trim(),
+    teamCode: String(form.teamCode || '').trim(),
+    remark: String(form.remark || '').trim(),
+  });
 }
 
 defineExpose({ submit });
@@ -165,19 +174,12 @@ defineExpose({ submit });
 
 <template>
   <div class="order-edit">
-    <!-- <p class="perm-tip">所属客服仅管理员可改；进行中订单客服仅可编辑存单（管理员也可修改）。</p> -->
-
-    <!-- 所属客服 -->
+    <!-- 所属客服（只读；修改入口在列表领取人列铅笔 → 独立弹窗 PUT /{id}/owner） -->
     <section class="edit-section">
       <h4>所属客服</h4>
       <div class="form-row">
         <label>所属客服</label>
-        <!-- <el-select v-if="isAdmin" v-model="form.claimerName" style="width: 260px" placeholder="请选择客服">
-          <el-option label="张三" value="张三" />
-          <el-option label="李四" value="李四" />
-          <el-option label="王五" value="王五" />
-        </el-select> -->
-        <strong>{{ row.claimerName }} ({{ row.claimerCorp }})</strong>
+        <strong>{{ row.claimerName || '—' }} ({{ row.claimerCorp || '—' }})</strong>
       </div>
     </section>
 
@@ -201,29 +203,29 @@ defineExpose({ submit });
         </div>
         <div class="form-row">
           <label>游戏名称</label>
-          <el-select v-model="form.gameName" placeholder="请选择游戏" style="width: 100%">
-            <el-option v-for="item in GAME_OPTIONS" :key="item" :label="item" :value="item" />
+          <el-select v-model="form.gameId" placeholder="请选择游戏" style="width: 100%" @change="form.specId = ''">
+            <el-option v-for="item in gameOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </div>
         <div class="form-row">
           <label>购买项目</label>
-          <span class="readonly">{{ row.product }}</span>
+          <span class="readonly">{{ row.product || '—' }}</span>
         </div>
         <div class="form-row">
           <label>游戏规格</label>
-          <el-select v-model="form.spec" placeholder="请选择规格" style="width: 100%">
-            <el-option v-for="item in SPEC_OPTIONS" :key="item" :label="item" :value="item" />
+          <el-select v-model="form.specId" placeholder="请选择规格" style="width: 100%">
+            <el-option v-for="item in specOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </div>
         <div class="form-row">
           <label>订单类型</label>
           <el-radio-group v-model="form.orderType">
-            <el-radio v-for="item in TYPE_OPTIONS" :key="item" :value="item">{{ item }}</el-radio>
+            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
           </el-radio-group>
         </div>
         <div class="form-row">
           <label>客户端</label>
-          <el-select v-model="form.clientType" multiple placeholder="支持多选" style="width: 100%">
+          <el-select v-model="form.clients" multiple placeholder="支持多选" style="width: 100%">
             <el-option v-for="item in CLIENT_OPTIONS" :key="item" :label="item" :value="item" />
           </el-select>
         </div>
@@ -237,9 +239,10 @@ defineExpose({ submit });
         </div>
         <div class="form-row">
           <label>组队码</label>
+          <!-- 组队码 teamCode：maintain 已支持（新 OpenAPI），随保存提交 -->
           <div class="copy-field">
-            <input v-model="form.groupCode" placeholder="无则不填" />
-            <button type="button" class="copy-btn" @click="copyText(form.groupCode)">复制</button>
+            <input v-model="form.teamCode" placeholder="无则不填" />
+            <button type="button" class="copy-btn" @click="copyText(form.teamCode)">复制</button>
           </div>
         </div>
         <div class="form-row">
@@ -251,13 +254,17 @@ defineExpose({ submit });
         </div>
         <div class="form-row">
           <label>创建时间</label>
-          <span class="readonly">{{ row.createTime }}</span>
+          <span class="readonly">{{ row.createTime || '—' }}</span>
+        </div>
+        <div class="form-row">
+          <label>订单金额(元)</label>
+          <strong>{{ money(row.amount) }}</strong>
         </div>
       </div>
       <div class="form-row">
-        <label>企鹅群二维码</label>
+        <label>企业群二维码</label>
         <div class="upload-box">
-          <img v-if="form.qrImg" :src="form.qrImg" class="upload-thumb" alt="企鹅群二维码" />
+          <img v-if="form.qrImg" :src="form.qrImg" class="upload-thumb" alt="企业群二维码" />
           <span v-else class="upload-empty">未上传</span>
           <label class="upload-btn">
             上传图片
@@ -265,14 +272,11 @@ defineExpose({ submit });
           </label>
           <button v-if="form.qrImg" type="button" class="upload-remove" @click="form.qrImg = ''">删除</button>
         </div>
-      </div>
-      <div class="form-row">
-        <label>订单金额(元)</label>
-        <strong>{{ money(row.amount) }}</strong>
+        <!-- <p class="form-tip">二维码字段上传接口待后端补充，当前仅本地展示、保存不提交。</p> -->
       </div>
     </section>
 
-    <!-- 存单（仅进行中订单编辑时展示） -->
+    <!-- 存单（仅进行中订单编辑时展示；字段接口未提供，本地编辑不提交） -->
     <section v-if="isProgress" class="edit-section">
       <h4>存单</h4>
       <template v-if="isDelta">
@@ -314,17 +318,18 @@ defineExpose({ submit });
         <label>存单备注</label>
         <textarea v-model="form.depositRemark" class="remark-area" rows="3" maxlength="200" placeholder="非三角洲订单展示，上限200字"></textarea>
       </div>
+      <p class="form-tip">存单字段（押金单/保底截图等）接口待后端补充，当前仅本地编辑、保存不提交。</p>
     </section>
 
-    <!-- 打手信息 -->
+    <!-- 打手信息（slots 名额列表；接单/转单时间字段接口未提供） -->
     <section v-if="row.status === '待派单' || players.length" class="edit-section">
       <h4>打手信息</h4>
       <p v-if="row.status === '待派单'" class="muted-text">接单后价值</p>
       <div v-else class="player-grid">
-        <div v-for="(p, i) in players" :key="i" class="player-card">
-          <strong>{{ p.name }}</strong>
-          <span>{{ p.club }}</span>
-          <span>{{ p.type }}：{{ p.time }}</span>
+        <div v-for="p in players" :key="`${p.slotNo}-${p.playerId}`" class="player-card">
+          <strong>打手ID：{{ p.playerId }}</strong>
+          <span>名额序号：{{ p.slotNo }}</span>
+          <span>来源：{{ p.source }}</span>
         </div>
       </div>
     </section>
@@ -333,26 +338,28 @@ defineExpose({ submit });
     <section class="edit-section">
       <h4>分成信息</h4>
       <div class="grid-2">
-        <div class="kv"><span>平台加价/减价</span><strong>{{ adjustText }}</strong></div>
-        <div class="kv"><span>工作室分成(元)</span><strong>接单后价值</strong></div>
-        <div class="kv"><span>平台分成(元)</span><strong>接单后价值</strong></div>
-        <div class="kv"><span>打手分成(元)</span><strong>接单后价值</strong></div>
+        <div class="kv"><span>平台加价/减价</span><strong>{{ adjustText(row.platformAdjust) }}</strong></div>
+        <div class="kv"><span>俱乐部加价/减价</span><strong>{{ adjustText(row.clubAdjust) }}</strong></div>
+        <div class="kv"><span>工作室分成(元)</span><strong>接单后价值（分润明细接口待补充）</strong></div>
+        <div class="kv"><span>平台分成(元)</span><strong>接单后价值（分润明细接口待补充）</strong></div>
+        <div class="kv"><span>打手分成(元)</span><strong>接单后价值（分润明细接口待补充）</strong></div>
       </div>
     </section>
 
-    <!-- 订单日志 -->
+    <!-- 订单日志（接口：logs） -->
     <section class="edit-section">
       <h4>订单日志</h4>
-      <ul class="log-list">
+      <ul v-if="logs.length" class="log-list">
         <li v-for="(log, i) in logs" :key="i">
           <span class="log-time">{{ log.time }}</span>
           <span class="log-text">{{ log.text }}</span>
           <span class="log-op">操作人：{{ log.op }}</span>
         </li>
       </ul>
+      <p v-else class="muted-text">暂无日志</p>
     </section>
 
-    <!-- 完成凭证 -->
+    <!-- 完成凭证（字段接口未提供，兜底展示） -->
     <section class="edit-section">
       <h4>完成凭证</h4>
       <div v-if="hasProof" class="proof-grid">
@@ -398,17 +405,6 @@ defineExpose({ submit });
   padding-right: 4px;
 }
 
-.perm-tip {
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--primary-soft);
-  border: 1px solid var(--primary-glow);
-  color: var(--primary);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
 .edit-section {
   display: grid;
   gap: 12px;
@@ -447,7 +443,6 @@ defineExpose({ submit });
   font-size: 12px;
 }
 
-/* el-select / el-radio-group 在双列与单行里撑满，高度与原生输入框(34px)对齐 */
 .grid-2 :deep(.el-select),
 .form-row :deep(.el-select) {
   width: 100%;
@@ -479,7 +474,6 @@ defineExpose({ submit });
 }
 
 .form-row input[type='number'],
-.form-row input[type='text']:not(.copy-field input),
 .form-row > input {
   flex: 1;
   min-width: 0;
@@ -495,7 +489,6 @@ defineExpose({ submit });
 }
 
 .form-row input[type='number']:focus,
-.form-row input[type='text']:not(.copy-field input):focus,
 .form-row > input:focus {
   outline: none;
   border-color: var(--primary);
@@ -751,6 +744,17 @@ defineExpose({ submit });
 .log-op {
   color: var(--text-faint);
   font-size: 12px;
+}
+
+.form-tip {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(250, 204, 21, 0.1);
+  border: 1px solid rgba(250, 204, 21, 0.28);
+  color: var(--warning-text);
+  font-size: 12px;
+  line-height: 1.8;
 }
 
 .proof-grid {

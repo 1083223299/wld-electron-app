@@ -11,26 +11,25 @@ const { confirm } = useConfirm();
 const { show } = useToast();
 
 // ============ 列表 ============
+// 后端接口全量返回（无分页参数），分页在本地完成，口径与游戏列表页一致
 const rows = ref([]);
 const total = ref(0);
 const { page, pageSize, onPageSizeChange, onPageChange } = useListMemory({});
 const loading = ref(false);
 
 const columns = [
-  { key: 'id', title: '渠道ID' },
-  { key: 'name', title: '渠道名称' },
+  { key: 'channelCode', title: '渠道编码' },
+  { key: 'shopId', title: '店铺ID' },
+  { key: 'shopName', title: '店铺名称' },
   { key: 'op', title: '操作' },
 ];
 
 async function fetchList() {
   loading.value = true;
   try {
-    const res = await channelApi.list({
-      page: page.value,
-      pageSize: pageSize.value,
-    });
-    rows.value = res.list || [];
-    total.value = res.total || 0;
+    const all = (await channelApi.list()) || [];
+    total.value = all.length;
+    rows.value = all.slice((page.value - 1) * pageSize.value, page.value * pageSize.value);
   } finally {
     loading.value = false;
   }
@@ -41,42 +40,65 @@ function pageChange(p) {
   fetchList();
 }
 
+/** 编辑/删除依赖列表返回的 id；列表接口未返回 id 时阻止操作并给出明确提示 */
+function rowId(row) {
+  if (row.id == null || row.id === '') {
+    show('该渠道缺少 ID，无法操作（列表接口未返回 id，请刷新后重试）', 'warning');
+    return null;
+  }
+  return row.id;
+}
+
 // ============ 新增 / 编辑 ============
 const editVisible = ref(false);
 const editingId = ref(null); // null = 新增
 const editForm = reactive({
-  name: '',
+  channelCode: '',
+  shopId: '',
+  shopName: '',
 });
 
 function openCreate() {
   editingId.value = null;
-  editForm.name = '';
+  editForm.channelCode = '';
+  editForm.shopId = '';
+  editForm.shopName = '';
   editVisible.value = true;
 }
 
 function openEdit(row) {
-  editingId.value = row.id;
-  editForm.name = row.name;
+  const id = rowId(row);
+  if (id == null) return;
+  editingId.value = id;
+  editForm.channelCode = row.channelCode || '';
+  editForm.shopId = row.shopId || '';
+  editForm.shopName = row.shopName || '';
   editVisible.value = true;
 }
 
 async function submitEdit() {
-  const name = editForm.name.trim();
-  if (!name) {
-    show('请输入渠道名称', 'warning');
+  const channelCode = editForm.channelCode.trim();
+  const shopId = editForm.shopId.trim();
+  const shopName = editForm.shopName.trim();
+  if (!editingId.value && !channelCode) {
+    show('请输入渠道编码', 'warning');
     return;
   }
-  if (name.length > 15) {
-    show('渠道名称上限15个字', 'warning');
+  if (!shopId) {
+    show('请输入店铺ID', 'warning');
+    return;
+  }
+  if (!shopName) {
+    show('请输入店铺名称', 'warning');
     return;
   }
 
   try {
     if (editingId.value) {
-      await channelApi.update(editingId.value, { name });
+      await channelApi.update(editingId.value, { shopId, shopName });
       show('编辑成功', 'success');
     } else {
-      await channelApi.create({ name });
+      await channelApi.create({ channelCode, shopId, shopName });
       show('新增成功', 'success');
     }
     editVisible.value = false;
@@ -88,18 +110,16 @@ async function submitEdit() {
 
 // ============ 删除 ============
 async function handleDelete(row) {
-  if (row.builtin) {
-    show('系统内置渠道不支持删除', 'warning');
-    return;
-  }
+  const id = rowId(row);
+  if (id == null) return;
   const ok = await confirm({
     title: '删除确认',
-    message: `确认删除渠道「${row.name}」吗？删除后该渠道下的历史订单仍可关联查询。`,
+    message: `确认删除渠道「${row.shopName || row.channelCode}」吗？删除后该渠道下的历史订单仍可关联查询。`,
     okText: '确认删除',
   });
   if (!ok) return;
   try {
-    await channelApi.remove(row.id);
+    await channelApi.remove(id);
     show('删除成功', 'success');
     fetchList();
   } catch (e) {
@@ -125,10 +145,20 @@ onMounted(fetchList);
         <button class="btn btn-primary" @click="openCreate">新增</button>
       </template>
 
+      <template #cell-channelCode="{ row }">
+        {{ row.channelCode || '-' }}
+      </template>
+
+      <template #cell-shopId="{ row }">
+        {{ row.shopId || '-' }}
+      </template>
+
+      <template #cell-shopName="{ row }">
+        {{ row.shopName || '-' }}
+      </template>
+
       <template #cell-op="{ row }">
-        <!-- 系统内置渠道（如抖音接入第三方 API）不支持人工编辑、删除 -->
-        <span v-if="row.builtin" class="text-muted">-</span>
-        <div v-else class="action-group">
+        <div class="action-group">
           <button class="link-btn" @click="openEdit(row)">编辑</button>
           <button class="link-btn danger" @click="handleDelete(row)">删除</button>
         </div>
@@ -136,16 +166,39 @@ onMounted(fetchList);
     </DataTable>
 
     <!-- 新增 / 编辑 弹窗 -->
-    <AppModal v-model="editVisible" :title="editingId ? '编辑' : '新增'" width="460px">
+    <AppModal v-model="editVisible" :title="editingId ? '编辑' : '新增'" width="640px">
       <div class="channel-modal-content">
         <div class="form-row">
-          <label class="required">渠道名称</label>
+          <label class="required">渠道编码</label>
           <input
-            v-model="editForm.name"
-            maxlength="15"
-            placeholder="上限15个字"
+            v-model="editForm.channelCode"
+            :disabled="!!editingId"
+            maxlength="50"
+            placeholder="如 DOUYIN / XHS，创建后不可修改"
             @keyup.enter="submitEdit"
           />
+          <p v-if="editingId" class="field-hint">渠道编码创建后不可修改</p>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row">
+            <label class="required">店铺ID</label>
+            <input
+              v-model="editForm.shopId"
+              maxlength="50"
+              placeholder="请输入店铺ID"
+              @keyup.enter="submitEdit"
+            />
+          </div>
+          <div class="form-row">
+            <label class="required">店铺名称</label>
+            <input
+              v-model="editForm.shopName"
+              maxlength="50"
+              placeholder="请输入店铺名称"
+              @keyup.enter="submitEdit"
+            />
+          </div>
         </div>
       </div>
       <template #footer>
@@ -169,10 +222,6 @@ onMounted(fetchList);
   align-items: center;
   gap: 6px 12px;
   min-width: max-content;
-}
-
-.text-muted {
-  color: #9aa3b5;
 }
 
 .link-btn {
@@ -204,6 +253,12 @@ onMounted(fetchList);
 .channel-modal-content {
   display: grid;
   gap: 20px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
 
 .form-row {
@@ -241,6 +296,18 @@ onMounted(fetchList);
   outline: none;
   background: var(--bg-card);
   box-shadow: 0 0 0 4px var(--primary-border);
+}
+
+.form-row input:disabled {
+  background: #eef0f5;
+  color: #98a1b3;
+  cursor: not-allowed;
+}
+
+.field-hint {
+  margin: 0;
+  color: #98a1b3;
+  font-size: 12px;
 }
 
 .btn {
@@ -310,7 +377,6 @@ onMounted(fetchList);
 
 .modal-box:has(.channel-modal-content) .modal-footer {
   padding: 16px 24px 20px;
-  /* background: linear-gradient(180deg, rgba(248, 250, 255, 0.7), rgba(243, 240, 255, 0.95)); */
   border-top: 1px solid var(--primary-faint);
 }
 </style>

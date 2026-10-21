@@ -1,32 +1,41 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
+import { playerApi } from '../../../api/modules/player';
+import { gameApi } from '../../../api/modules/game';
 
 const { confirm } = useConfirm();
 const { show } = useToast();
 
 const filter = reactive({
-  playerId: '',
-  playerName: '',
-  phone: '',
+  keyword: '',
   clubId: '',
-  clubName: '',
   status: '',
-  createTime: [],
 });
 
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['playerId', 'playerName', 'phone', 'clubId', 'clubName', 'status', 'createTime'],
+  filterKeys: ['keyword', 'clubId', 'status'],
 });
 restoreFilter(filter);
 const editDialogVisible = ref(false);
 const assetDialogVisible = ref(false);
 const currentRow = ref(null);
+
+// ============ 可接单规格 ============
+const specDialogVisible = ref(false);
+const specLoading = ref(false);
+const specSaving = ref(false);
+const specLoadError = ref(false);
+// 游戏-规格目录：来源 gameApi.all()（当前为 mock），真实联调时规格 id 以游戏/规格列表接口返回为准
+const specCatalog = ref([]); // [{ gameId, gameName, specs: [{ id, name }] }]
+const specGameRows = ref([]); // [{ gameId, gameName, specs, all, checked:Set<number> }]
+
+const specDialogTitle = computed(() => `可接单规格 - ${currentRow.value?.name ?? ''}`);
 
 const editForm = reactive({
   name: '',
@@ -76,18 +85,9 @@ const getAssetPlaceholder = computed(() => {
 
 const maxUploadFiles = 5;
 
-const rows = ref([
-  { id: '2455415', phone: '13800000001', name: '张三', clubName: '未来电商', clubId: '10001', income: 0, deposit: 0, finished: 0, failed: 0, freezeCount: 0, status: '可接单', isFrozen: false, isInStore: true, remark: '' },
-  { id: '2455416', phone: '13800000002', name: '李四', clubName: '未来电竞', clubId: '10002', income: 0, deposit: 0, finished: 1, failed: 2, freezeCount: 0, status: '禁止接单', isFrozen: false, isInStore: true, remark: '' },
-  { id: '2455417', phone: '13800000003', name: '王五', clubName: '未来娱乐', clubId: '10003', income: 3000, deposit: 5000, finished: 5, failed: 1, freezeCount: 1, status: '冻结', isFrozen: true, isInStore: true, remark: '冻结理由：风险控制' },
-  { id: '2455418', phone: '13800000004', name: '赵六', clubName: '未来文化', clubId: '10004', income: 6600, deposit: 1200, finished: 2, failed: 0, freezeCount: 0, status: '退店', isFrozen: false, isInStore: false, remark: '' },
-  { id: '2455419', phone: '13800000005', name: '周七', clubName: '未来俱乐部', clubId: '10005', income: 1100, deposit: 500, finished: 9, failed: 3, freezeCount: 0, status: '未冻结', isFrozen: false, isInStore: true, remark: '' },
-  { id: '2455420', phone: '13800000006', name: '吴八', clubName: '未来共享', clubId: '10006', income: 2300, deposit: 800, finished: 4, failed: 0, freezeCount: 0, status: '可接单', isFrozen: false, isInStore: true, remark: '' },
-  { id: '2455421', phone: '13800000007', name: '郑九', clubName: '未来渠道', clubId: '10007', income: 900, deposit: 200, finished: 3, failed: 1, freezeCount: 0, status: '冻结', isFrozen: true, isInStore: true, remark: '账户异常' },
-  { id: '2455422', phone: '13800000008', name: '孙十', clubName: '未来科技', clubId: '10008', income: 5000, deposit: 3000, finished: 8, failed: 2, freezeCount: 0, status: '在店', isFrozen: false, isInStore: true, remark: '' },
-  { id: '2455423', phone: '13800000009', name: '黄十一', clubName: '未来联盟', clubId: '10009', income: 200, deposit: 100, finished: 1, failed: 0, freezeCount: 0, status: '可接单', isFrozen: false, isInStore: true, remark: '' },
-  { id: '2455424', phone: '13800000010', name: '陈十二', clubName: '未来工作室', clubId: '10010', income: 1000, deposit: 300, finished: 7, failed: 2, freezeCount: 0, status: '退店', isFrozen: false, isInStore: false, remark: '' },
-]);
+const rows = ref([]);
+const total = ref(0);
+const loading = ref(false);
 
 const statusOptions = ['可接单', '禁止接单', '未冻结', '冻结', '在店', '退店'];
 
@@ -105,56 +105,81 @@ const columns = [
 ];
 
 const searchFields = [
-  { prop: 'playerId', label: '打手ID', type: 'input', placeholder: '请输入打手ID', span: 5 },
-  { prop: 'playerName', label: '打手名称', type: 'input', placeholder: '请输入打手名称', span: 5 },
-  { prop: 'phone', label: '打手手机号', type: 'input', placeholder: '请输入手机号', span: 5 },
+  { prop: 'keyword', label: '关键词', type: 'input', placeholder: '名称或手机号', span: 6 },
   { prop: 'clubId', label: '俱乐部ID', type: 'input', placeholder: '请输入俱乐部ID', span: 5 },
-  { prop: 'clubName', label: '俱乐部名称', type: 'input', placeholder: '请输入俱乐部名称', span: 5 },
   {
     prop: 'status',
     label: '状态',
     type: 'select',
     placeholder: '全部',
-    span: 4,
-    options: [{ label: '全部', value: '' }, ...statusOptions.map((item) => ({ label: item, value: item }))],
-  },
-  {
-    prop: 'createTime',
-    label: '创建时间',
-    type: 'daterange',
-    startPlaceholder: '开始时间',
-    endPlaceholder: '结束时间',
-    shortcuts: [
-      { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
-      { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
-      { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+    span: 5,
+    options: [
+      { label: '全部', value: '' },
+      { label: '正常', value: 'NORMAL' },
+      { label: '禁止接单', value: 'DISABLED' },
     ],
   },
 ];
 
-const filteredRows = computed(() => {
-  const matches = (value, matcher) => {
-    if (!value) return true;
-    return String(matcher).toLowerCase().includes(String(value).toLowerCase());
+// ============ 列表数据（服务端分页/筛选） ============
+/** 后端列表字段 → 页面展示字段；钱包/订单统计字段当前接口未返回，待对应接口接入后填充 */
+function mapPlayerRow(item = {}) {
+  const statusRaw = String(item.status || '').toUpperCase();
+  const inStore = Number(item.inStore) === 1;
+  const canTake = Number(item.canTake) === 1;
+
+  let status = '可接单';
+  if (item.quitAt) status = '退店';
+  else if (statusRaw === 'DISABLED' || !canTake) status = '禁止接单';
+
+  return {
+    id: item.id,
+    clubId: item.clubId,
+    clubName: item.clubName || '',
+    name: item.name || '',
+    phone: item.phone || '',
+    status,
+    isFrozen: false, // 列表接口暂无冻结字段，钱包冻结/解冻接口接入后填充
+    isInStore: inStore,
+    canTake,
+    remark: '',
+    quitAt: item.quitAt || '',
+    income: item.income ?? '—',
+    deposit: item.deposit ?? '—',
+    finished: item.finished ?? '—',
+    failed: item.failed ?? '—',
+    freezeCount: item.freezeCount ?? '—',
   };
+}
 
-  return rows.value.filter((row) => {
-    const playerIdMatch = !filter.playerId || row.id === String(filter.playerId).trim();
-    const playerNameMatch = !filter.playerName || matches(filter.playerName, row.name);
-    const phoneMatch = !filter.phone || row.phone === String(filter.phone).trim();
-    const clubIdMatch = !filter.clubId || row.clubId === String(filter.clubId).trim();
-    const clubNameMatch = !filter.clubName || matches(filter.clubName, row.clubName);
-    const statusMatch = !filter.status || row.status === filter.status;
-    return playerIdMatch && playerNameMatch && phoneMatch && clubIdMatch && clubNameMatch && statusMatch;
-  });
-});
+function fmtMoney(value) {
+  if (value === '' || value === null || value === undefined || value === '—') return '—';
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(2) : '—';
+}
 
-const total = computed(() => filteredRows.value.length);
+async function fetchList() {
+  loading.value = true;
+  try {
+    const res = await playerApi.list({
+      page: page.value,
+      pageSize: pageSize.value,
+      keyword: filter.keyword,
+      clubId: filter.clubId,
+      status: filter.status,
+    });
+    rows.value = (res && res.list) || [];
+    total.value = (res && res.total) || 0;
+  } catch (e) {
+    // 错误提示由 request.js 统一弹出
+    rows.value = [];
+    total.value = 0;
+  } finally {
+    loading.value = false;
+  }
+}
 
-const pagedRows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
+onMounted(fetchList);
 
 function openEdit(row) {
   currentRow.value = row;
@@ -166,6 +191,81 @@ function openEdit(row) {
     remark: row.remark || '',
   });
   editDialogVisible.value = true;
+}
+
+async function loadSpecCatalog() {
+  if (specCatalog.value.length) return;
+  const games = await gameApi.all();
+  specCatalog.value = (games || []).map((game) => ({
+    gameId: game.id,
+    gameName: game.name,
+    specs: (game.specs || []).map((name, i) => ({ id: i + 1, name })),
+  }));
+}
+
+function buildSpecRows(list) {
+  const configMap = new Map((list || []).map((item) => [Number(item.gameId), item]));
+  specGameRows.value = specCatalog.value.map((game) => {
+    const cfg = configMap.get(game.gameId);
+    const all = !!(cfg && cfg.all);
+    const checked = new Set(all || !cfg ? [] : (Array.isArray(cfg.specIds) ? cfg.specIds.map(Number) : []));
+    return { ...game, all, checked };
+  });
+}
+
+async function openSpecs(row) {
+  currentRow.value = row;
+  specGameRows.value = [];
+  specLoadError.value = false;
+  specDialogVisible.value = true;
+  specLoading.value = true;
+  try {
+    await loadSpecCatalog();
+    const list = await playerApi.getSpecs(Number(row.id));
+    buildSpecRows(list);
+  } catch (e) {
+    // 错误提示由 request.js 统一弹出，这里仅标记加载失败态
+    specLoadError.value = true;
+  } finally {
+    specLoading.value = false;
+  }
+}
+
+function toggleGameAll(row) {
+  if (specSaving.value || !row.specs.length) return;
+  row.all = !row.all;
+  if (row.all) row.checked.clear();
+}
+
+function toggleSpec(row, specId) {
+  if (specSaving.value || row.all) return;
+  if (row.checked.has(specId)) row.checked.delete(specId);
+  else row.checked.add(specId);
+  // 单规格全选后自动视为“全部规格”
+  row.all = row.specs.length > 0 && row.checked.size === row.specs.length;
+  if (row.all) row.checked.clear();
+}
+
+async function saveSpecs() {
+  if (!currentRow.value) return;
+  // 仅提交有选中的游戏；all=true 或 specIds 为空均表示该游戏全部规格可接
+  const specs = specGameRows.value
+    .filter((row) => row.all || row.checked.size > 0)
+    .map((row) => ({
+      gameId: row.gameId,
+      all: row.all,
+      specIds: row.all ? [] : [...row.checked],
+    }));
+  specSaving.value = true;
+  try {
+    await playerApi.updateSpecs(Number(currentRow.value.id), specs);
+    show('规格保存成功', 'success');
+    specDialogVisible.value = false;
+  } catch (e) {
+    // 错误提示由 request.js 统一弹出
+  } finally {
+    specSaving.value = false;
+  }
 }
 
 function normalizeAssetAmount(value) {
@@ -292,6 +392,7 @@ function openAsset(row) {
 function handleSearch(values) {
   Object.assign(filter, values);
   rememberFilter(filter, true);
+  fetchList();
 }
 
 function handleReset() {
@@ -300,6 +401,7 @@ function handleReset() {
     else filter[key] = '';
   });
   rememberFilter(filter, true);
+  fetchList();
 }
 
 function getStatusClass(status) {
@@ -419,6 +521,12 @@ function submitAsset() {
 
 function pageChange(nextPage) {
   onPageChange(nextPage);
+  fetchList();
+}
+
+function pageSizeChange(size) {
+  onPageSizeChange(size);
+  fetchList();
 }
 </script>
 
@@ -435,15 +543,15 @@ function pageChange(nextPage) {
 
     <DataTable
       :columns="columns"
-      :data="pagedRows"
+      :data="rows"
       :total="total"
       :page="page"
       :page-size="pageSize"
       @page-change="pageChange"
-      @page-size-change="onPageSizeChange"
+      @page-size-change="pageSizeChange"
     >
-      <template #cell-income="{ row }">{{ row.income.toFixed(2) }}</template>
-      <template #cell-deposit="{ row }">{{ row.deposit.toFixed(2) }}</template>
+      <template #cell-income="{ row }">{{ fmtMoney(row.income) }}</template>
+      <template #cell-deposit="{ row }">{{ fmtMoney(row.deposit) }}</template>
 
       <template #cell-status="{ row }">
         <span :class="['status-badge', getStatusClass(row.status)]">{{ row.status }}</span>
@@ -453,6 +561,7 @@ function pageChange(nextPage) {
         <div class="action-group">
           <button class="link-btn" @click="openEdit(row)">编辑</button>
           <button class="link-btn" @click="openAsset(row)">资产管理</button>
+          <button class="link-btn" @click="openSpecs(row)">规格</button>
 
           <button v-if="canShowAction(row, '禁止接单')" class="link-btn danger" @click="triggerAction('禁止接单', row)">
             禁止接单
@@ -594,6 +703,55 @@ function pageChange(nextPage) {
       <template #footer>
         <button class="btn btn-plain" @click="assetDialogVisible = false">取消</button>
         <button class="btn btn-primary" @click="submitAsset">确定</button>
+      </template>
+    </AppModal>
+
+    <AppModal v-model="specDialogVisible" :title="specDialogTitle" width="640px">
+      <div class="spec-dialog-card player-modal-content">
+        <div v-if="specLoading" class="spec-loading">规格加载中…</div>
+        <template v-else>
+          <div v-if="specLoadError" class="spec-empty">规格加载失败，请检查接口或稍后重试</div>
+          <div v-else-if="!specGameRows.length" class="spec-empty">暂无游戏规格数据，请先在游戏管理中配置</div>
+          <div v-else class="spec-game-list">
+            <div v-for="game in specGameRows" :key="game.gameId" class="spec-game-item">
+              <div class="spec-game-head">
+                <span class="spec-game-name">{{ game.gameName }}</span>
+                <label class="spec-all-toggle" :class="{ muted: !game.specs.length }">
+                  <input
+                    type="checkbox"
+                    :checked="game.all"
+                    :disabled="specSaving || !game.specs.length"
+                    @change="toggleGameAll(game)"
+                  />
+                  <span>全部规格</span>
+                </label>
+              </div>
+              <div v-if="game.specs.length" class="spec-tags">
+                <label
+                  v-for="spec in game.specs"
+                  :key="spec.id"
+                  :class="['spec-tag', { active: game.all || game.checked.has(spec.id), disabled: game.all }]"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="game.all || game.checked.has(spec.id)"
+                    :disabled="game.all || specSaving"
+                    @change="toggleSpec(game, spec.id)"
+                  />
+                  <span>{{ spec.name }}</span>
+                </label>
+              </div>
+              <div v-else class="spec-game-none">该游戏暂未配置规格</div>
+            </div>
+          </div>
+          <div class="spec-tip">勾选后该打手可接对应游戏规格的订单；勾选“全部规格”表示该游戏下所有规格均可接，未勾选任何规格的游戏不会提交。</div>
+        </template>
+      </div>
+      <template #footer>
+        <button class="btn btn-plain" @click="specDialogVisible = false">取消</button>
+        <button class="btn btn-primary" :disabled="specLoading || specSaving" @click="saveSpecs">
+          {{ specSaving ? '保存中…' : '保存' }}
+        </button>
       </template>
     </AppModal>
   </div>
@@ -1124,6 +1282,141 @@ function pageChange(nextPage) {
 .btn-primary:hover {
   filter: brightness(1.06);
   box-shadow: 0 16px 30px var(--primary-border-strong);
+}
+
+/* ===== 可接单规格弹窗 ===== */
+.spec-dialog-card {
+  display: grid;
+  gap: 16px;
+}
+
+.spec-loading,
+.spec-empty {
+  padding: 32px 12px;
+  text-align: center;
+  color: #8a93a6;
+  font-size: 13px;
+}
+
+.spec-game-list {
+  display: grid;
+  gap: 12px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.spec-game-item {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #e3e7f0;
+  border-radius: 14px;
+  background: #fbfcfe;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.spec-game-item:hover {
+  border-color: #c9b8ff;
+  box-shadow: 0 6px 16px var(--primary-border);
+}
+
+.spec-game-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spec-game-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.spec-all-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #475467;
+  cursor: pointer;
+  user-select: none;
+}
+
+.spec-all-toggle.muted {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spec-all-toggle input {
+  width: auto;
+  accent-color: var(--primary);
+}
+
+.spec-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.spec-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #e3e7f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.16s ease;
+}
+
+.spec-tag:hover {
+  border-color: #c9b8ff;
+  color: var(--primary);
+}
+
+.spec-tag.active {
+  border-color: transparent;
+  background: var(--primary-faint);
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--primary-border-strong);
+}
+
+.spec-tag.disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.spec-tag.disabled:hover {
+  border-color: #e3e7f0;
+  color: #475467;
+}
+
+.spec-tag input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.spec-game-none {
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.spec-tip {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--primary-faint);
+  color: #8a93a6;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>
 

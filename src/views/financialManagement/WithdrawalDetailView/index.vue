@@ -1,58 +1,64 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useListMemory } from '../../../composables/useListMemory';
-import {
-  IDENTITY_OPTIONS,
-  WITHDRAW_TYPE_OPTIONS,
-  STATUS_MAP,
-  buildWithdrawalRows,
-} from './mockData';
+import { withdrawalApi } from '../../../api/modules/withdrawal';
 
 /**
  * 财务管理 > 提现明细
- * 依据《提现走系统自动打款》需求图还原：
- * - 顶部「收益 / 押金」Tab 切换
- * - 搜索区：用户ID、用户名称、俱乐部ID、俱乐部名称、身份、收支类型、提交时间
- * - 表格：身份、账号ID、账号昵称、支付宝账号、提现金额(元)、状态、原因、提交时间
- * - 状态：待审核(橙) / 打款成功(绿) / 打款失败(红)
+ * 接口：GET /api/admin/finance/withdrawals（服务端分页/筛选）
+ * - 顶部「收益 / 押金」Tab → walletType: INCOME / DEPOSIT
+ * - 搜索区：关键词(账号昵称或手机号)、俱乐部ID、身份、状态、提交时间
+ * - 状态：PROCESSING(处理中) / SUCCESS(打款成功) / FAILED(打款失败)，一期自动打款无待审核
  */
 
-// ===== Tab 切换 =====
+// ===== Tab 切换（映射 walletType 参数） =====
 const activeTab = ref('income'); // income | deposit
 const tabOptions = [
   { label: '收益', value: 'income' },
   { label: '押金', value: 'deposit' },
 ];
-
-// ===== 数据源（本地模拟，上线后替换为接口） =====
-const incomeRows = ref(buildWithdrawalRows('income', 329));
-const depositRows = ref(buildWithdrawalRows('deposit', 329));
+const walletTypeByTab = { income: 'INCOME', deposit: 'DEPOSIT' };
 
 // ===== 筛选条件 =====
 const filter = reactive({
-  userId: '',
-  userName: '',
+  keyword: '',   // 账号昵称或手机号
   clubId: '',
-  clubName: '',
-  identity: '',
-  flowType: '',
-  timeRange: [],
+  ownerType: '', // CLUB / PLAYER
+  status: '',    // PROCESSING / SUCCESS / FAILED
+  timeRange: [], // [from, to]，格式 YYYY-MM-DD HH:mm:ss
 });
 
+const OWNER_TYPE_OPTIONS = [
+  { label: '俱乐部', value: 'CLUB' },
+  { label: '打手', value: 'PLAYER' },
+];
+
+const STATUS_OPTIONS = [
+  { label: '处理中', value: 'PROCESSING' },
+  { label: '打款成功', value: 'SUCCESS' },
+  { label: '打款失败', value: 'FAILED' },
+];
+
+const STATUS_MAP = {
+  PROCESSING: { text: '处理中', class: 'status-warning' },
+  SUCCESS: { text: '打款成功', class: 'status-success' },
+  FAILED: { text: '打款失败', class: 'status-danger' },
+};
+
+const OWNER_TYPE_TEXT = { CLUB: '俱乐部', PLAYER: '打手' };
+
 const searchFields = [
-  { prop: 'userId', label: '用户ID', type: 'input', placeholder: '请输入用户ID' },
-  { prop: 'userName', label: '用户名称', type: 'input', placeholder: '请输入用户名称' },
+  { prop: 'keyword', label: '关键词', type: 'input', placeholder: '账号昵称或手机号' },
   { prop: 'clubId', label: '俱乐部ID', type: 'input', placeholder: '请输入俱乐部ID' },
-  { prop: 'clubName', label: '俱乐部名称', type: 'input', placeholder: '请输入俱乐部名称' },
   {
-    prop: 'identity', label: '身份', type: 'select', placeholder: '请选择身份',
-    options: [{ label: '全部', value: '' }, ...IDENTITY_OPTIONS],
+    prop: 'ownerType', label: '身份', type: 'select', placeholder: '请选择身份',
+    options: [{ label: '全部', value: '' }, ...OWNER_TYPE_OPTIONS],
   },
   {
-    prop: 'flowType', label: '收支类型', type: 'select', placeholder: '请选择收支类型',
-    options: [{ label: '全部', value: '' }, ...WITHDRAW_TYPE_OPTIONS],
+    prop: 'status', label: '状态', type: 'select', placeholder: '请选择状态',
+    options: [{ label: '全部', value: '' }, ...STATUS_OPTIONS],
   },
   {
     prop: 'timeRange', label: '提交时间', type: 'daterange',
@@ -67,46 +73,47 @@ const searchFields = [
 
 // ===== 分页与列表记忆 =====
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['userId', 'userName', 'clubId', 'clubName', 'identity', 'flowType', 'timeRange'],
+  filterKeys: ['keyword', 'clubId', 'ownerType', 'status', 'timeRange'],
 });
 restoreFilter(filter);
 
-// 当前 Tab 的全量数据
-const currentRows = computed(() =>
-  activeTab.value === 'income' ? incomeRows.value : depositRows.value,
-);
+// ===== 列表数据（服务端分页/筛选） =====
+const rows = ref([]);
+const total = ref(0);
+const loading = ref(false);
 
-// 过滤后的数据
-const filteredRows = computed(() => {
-  return currentRows.value.filter((row) => {
-    const userIdMatch = !filter.userId || row.accountId.includes(String(filter.userId).trim());
-    const userNameMatch = !filter.userName || row.nickname.includes(String(filter.userName).trim());
-    const clubIdMatch = !filter.clubId || (row.identity === '俱乐部' && row.accountId.includes(String(filter.clubId).trim()));
-    const clubNameMatch = !filter.clubName || (row.identity === '俱乐部' && row.nickname.includes(String(filter.clubName).trim()));
-    const identityMatch = !filter.identity || (filter.identity === 'club' ? row.identity === '俱乐部' : row.identity === '打手');
-    const flowTypeMatch = !filter.flowType || row.type === filter.flowType;
+async function fetchList() {
+  loading.value = true;
+  try {
+    const range = Array.isArray(filter.timeRange) && filter.timeRange.length === 2 ? filter.timeRange : [];
+    const res = await withdrawalApi.list({
+      page: page.value,
+      pageSize: pageSize.value,
+      from: range[0] || '',
+      to: range[1] || '',
+      ownerType: filter.ownerType,
+      walletType: walletTypeByTab[activeTab.value],
+      keyword: filter.keyword,
+      clubId: filter.clubId,
+      status: filter.status,
+    });
+    rows.value = (res && res.list) || [];
+    total.value = (res && res.total) || 0;
+  } catch (e) {
+    // 错误提示由 request.js 统一弹出
+    rows.value = [];
+    total.value = 0;
+  } finally {
+    loading.value = false;
+  }
+}
 
-    let timeMatch = true;
-    if (Array.isArray(filter.timeRange) && filter.timeRange.length === 2 && filter.timeRange[0]) {
-      const start = new Date(String(filter.timeRange[0]).replace(/-/g, '/')).getTime();
-      const end = new Date(String(filter.timeRange[1]).replace(/-/g, '/')).getTime();
-      const t = new Date(row.submitTime.replace(/-/g, '/')).getTime();
-      timeMatch = t >= start && t <= end;
-    }
-
-    return userIdMatch && userNameMatch && clubIdMatch && clubNameMatch && identityMatch && flowTypeMatch && timeMatch;
-  });
-});
-
-const total = computed(() => filteredRows.value.length);
-const rows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
+onMounted(fetchList);
 
 function handleSearch(values) {
   Object.assign(filter, values);
   rememberFilter(filter, true);
+  fetchList();
 }
 
 function handleReset() {
@@ -115,26 +122,40 @@ function handleReset() {
     else filter[key] = '';
   });
   rememberFilter(filter, true);
+  fetchList();
 }
 
 function switchTab(tab) {
+  if (activeTab.value === tab) return;
   activeTab.value = tab;
   page.value = 1;
+  fetchList();
 }
 
-const money = (value) => (Number(value) || 0).toFixed(2);
+function pageChange(nextPage) {
+  onPageChange(nextPage);
+  fetchList();
+}
+
+function pageSizeChange(size) {
+  onPageSizeChange(size);
+  fetchList();
+}
 
 // ===== 表格列 =====
 const columns = [
-  { key: 'identity', title: '身份' },
+  { key: 'ownerType', title: '身份' },
   { key: 'accountId', title: '账号ID' },
-  { key: 'nickname', title: '账号昵称' },
+  { key: 'accountName', title: '账号昵称' },
   { key: 'alipayAccount', title: '支付宝账号' },
   { key: 'amount', title: '提现金额(元)' },
   { key: 'status', title: '状态' },
-  { key: 'reason', title: '原因' },
-  { key: 'submitTime', title: '提交时间' },
+  { key: 'failReason', title: '原因' },
+  { key: 'submittedAt', title: '提交时间' },
 ];
+
+const money = (value) => (Number(value) || 0).toFixed(2);
+const ownerTypeText = (value) => OWNER_TYPE_TEXT[value] || value || '—';
 </script>
 
 <template>
@@ -171,17 +192,23 @@ const columns = [
       :total="total"
       :page="page"
       :page-size="pageSize"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
+      @page-change="pageChange"
+      @page-size-change="pageSizeChange"
     >
+      <template #cell-ownerType="{ row }">{{ ownerTypeText(row.ownerType) }}</template>
+
       <template #cell-amount="{ row }">{{ money(row.amount) }}</template>
 
       <template #cell-status="{ row }">
-        <span class="status-badge" :class="STATUS_MAP[row.status]?.class">{{ STATUS_MAP[row.status]?.text }}</span>
+        <span class="status-badge" :class="STATUS_MAP[row.status]?.class">{{ STATUS_MAP[row.status]?.text ?? row.status }}</span>
       </template>
 
-      <template #cell-reason="{ row }">
-        <span :class="{ 'muted-text': !row.reason }">{{ row.reason || '—' }}</span>
+      <template #cell-failReason="{ row }">
+        <span :class="{ 'muted-text': !row.failReason }">{{ row.failReason || '—' }}</span>
+      </template>
+
+      <template #cell-submittedAt="{ row }">
+        <span :class="{ 'muted-text': !row.submittedAt }">{{ row.submittedAt || '—' }}</span>
       </template>
     </DataTable>
   </div>

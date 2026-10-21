@@ -1,27 +1,30 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useUserStore } from '../../../stores/user';
-import { handoverApi, STAFF_LIST, LOG_STATUS } from '../../../api/modules/handover';
+import { handoverApi, LOG_STATUS } from '../../../api/modules/handover';
 import { useToast } from '../../../composables/useToast';
 import AppModal from '../../../components/AppModal.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
+import PaginationSimple from '../../../components/PaginationSimple/index.vue';
 
 /**
- * 交接中心 > 交接日志
- * 按需求原型实现：
- * - 顶部搜索：日期范围 + 状态 + 搜索/重置
- * - 卡片流：新增按钮、与我相关勾选、两列卡片网格
- * - 新增弹窗：内容(300字) / 关注人(@自己真实姓名，快捷@全部人员) / 关联订单
- * - 处理日志弹窗：人员 / 状态 / 处理时间
+ * 交接中心 > 交接日志（已联调真实接口）
+ * - GET  /api/admin/handovers            列表（服务端分页 + from/to/status/mine 筛选）
+ * - POST /api/admin/handovers/{id}/ack   关注人标记已处理（token 识别当前用户）
+ * - POST /api/admin/handovers            新建（content 必填，orderId 可选，watcherIds 关注人）
+ * - GET  /api/admin/accounts             关注人候选
+ * - 列表项 myWatcherStatus：当前登录人作为关注人时的 PENDING/DONE，非关注人为 null
  */
 const userStore = useUserStore();
 const { show } = useToast();
-const currentUser = computed(() => userStore.displayName || '未登录');
+// 当前登录账号信息（接口通过 token 识别用户身份，accountId 仅用于前端兜底判断）
+const myAccountId = computed(() => userStore.user?.accountId);
+const myName = computed(() => userStore.displayName || '');
 
 /* ================= 搜索区（复用共享 SearchComponent） ================= */
 const filter = reactive({
   dateRange: [], // [开始日期, 结束日期] YYYY-MM-DD
-  status: '', // '' 全部 / 0 待处理 / 1 已处理
+  status: '', // '' 全部 / PENDING 待处理 / DONE 已处理
 });
 
 const searchFields = [
@@ -49,18 +52,41 @@ const relatedToMe = ref(false);
 const list = ref([]);
 const loading = ref(false);
 
+/* ================= 服务端分页 ================= */
+const page = ref(1);
+const pageSize = ref(20); // 接口默认 20，最大 100
+const total = ref(0);
+
+// 由接口原始字段计算卡片展示字段（watchers 处理明细 → 整体状态）
+function decorate(item) {
+  const watchers = item.watchers || [];
+  const doneCount = watchers.filter((w) => w.status === LOG_STATUS.DONE).length;
+  return {
+    ...item,
+    doneCount,
+    totalWatchers: watchers.length,
+    status:
+      watchers.length > 0 && doneCount === watchers.length
+        ? LOG_STATUS.DONE
+        : LOG_STATUS.PENDING,
+    watcherNames: watchers.map((w) => w.accountName),
+  };
+}
+
 async function loadList() {
   loading.value = true;
   try {
     const [startDate, endDate] = filter.dateRange || [];
     const res = await handoverApi.list({
-      startDate: startDate || '',
-      endDate: endDate || '',
+      page: page.value,
+      pageSize: pageSize.value,
+      from: startDate || '',
+      to: endDate || '',
       status: filter.status,
-      relatedToMe: relatedToMe.value,
-      currentUser: currentUser.value,
+      mine: relatedToMe.value ? 1 : '', // 传 1 仅看与我相关；空值自动剔除
     });
-    list.value = res.list || [];
+    total.value = res.total || 0;
+    list.value = (res.list || []).map(decorate);
   } finally {
     loading.value = false;
   }
@@ -68,22 +94,48 @@ async function loadList() {
 
 function handleSearch(values) {
   Object.assign(filter, values);
+  page.value = 1;
   loadList();
 }
 
 function handleReset(values) {
   Object.assign(filter, values);
+  page.value = 1;
+  loadList();
+}
+
+function handlePageChange(val) {
+  page.value = val;
+  loadList();
+}
+
+function handlePageSizeChange(size) {
+  pageSize.value = size;
+  page.value = 1;
   loadList();
 }
 
 /* ================= 卡片状态 ================= */
-// 当前用户在该条日志中是否已处理
+// 当前登录用户是否是本条交接的关注人
+function isMyWatcher(item) {
+  if (item.myWatcherStatus != null) return true;
+  return (item.watchers || []).some(
+    (w) => w.accountId === myAccountId.value || w.accountName === myName.value
+  );
+}
+
+// 当前登录用户在该条日志中是否已处理（优先使用接口返回的 myWatcherStatus）
 function isMineDone(item) {
-  return item.logs.some((l) => l.user === currentUser.value && l.status === LOG_STATUS.DONE);
+  if (item.myWatcherStatus != null) return item.myWatcherStatus === LOG_STATUS.DONE;
+  return (item.watchers || []).some(
+    (w) =>
+      w.status === LOG_STATUS.DONE &&
+      (w.accountId === myAccountId.value || w.accountName === myName.value)
+  );
 }
 
 async function handleMarkDone(item) {
-  await handoverApi.markProcessed(item.id, currentUser.value);
+  await handoverApi.ack(item.id);
   show('已处理', 'success');
   loadList();
 }
@@ -92,17 +144,35 @@ async function handleMarkDone(item) {
 const createVisible = ref(false);
 const createForm = reactive({
   content: '',
-  watchers: [],
+  watcherIds: [],
   watchAll: false,
-  orderNos: [],
+  orderId: '',
 });
+
+// 关注人候选（账号列表）
+const watcherOptions = ref([]);
+
+async function loadAccounts() {
+  try {
+    watcherOptions.value = await handoverApi.accounts();
+  } catch {
+    watcherOptions.value = [];
+  }
+}
 
 function openCreate() {
   createForm.content = '';
-  createForm.watchers = [];
+  createForm.watcherIds = [];
   createForm.watchAll = false;
-  createForm.orderNos = [];
+  createForm.orderId = '';
   createVisible.value = true;
+}
+
+function toggleWatchAll() {
+  createForm.watchAll = !createForm.watchAll;
+  createForm.watcherIds = createForm.watchAll
+    ? watcherOptions.value.map((a) => a.accountId)
+    : [];
 }
 
 async function submitCreate() {
@@ -110,13 +180,19 @@ async function submitCreate() {
     show('请输入交接内容', 'error');
     return;
   }
-  await handoverApi.create({
-    content: createForm.content.trim(),
-    orderNos: createForm.orderNos,
-    watchers: createForm.watchers,
-    watchAll: createForm.watchAll,
-    currentUser: currentUser.value,
-  });
+  const payload = { content: createForm.content.trim() };
+  if (createForm.watcherIds.length) {
+    payload.watcherIds = createForm.watcherIds;
+  }
+  if (createForm.orderId) {
+    const orderId = Number(createForm.orderId);
+    if (!Number.isInteger(orderId)) {
+      show('请输入正确的订单号', 'error');
+      return;
+    }
+    payload.orderId = orderId;
+  }
+  await handoverApi.create(payload);
   createVisible.value = false;
   show('新增成功', 'success');
   loadList();
@@ -127,13 +203,17 @@ const logsVisible = ref(false);
 const logsList = ref([]);
 const logsTitle = ref('处理日志');
 
-async function openLogs(item) {
+// 接口未提供独立明细接口，直接使用列表返回的 watchers 处理明细
+function openLogs(item) {
   logsTitle.value = '处理日志';
-  logsList.value = await handoverApi.logs(item.id);
+  logsList.value = item.watchers || [];
   logsVisible.value = true;
 }
 
-onMounted(loadList);
+onMounted(() => {
+  loadList();
+  loadAccounts();
+});
 </script>
 
 <template>
@@ -163,10 +243,10 @@ onMounted(loadList);
       <div v-for="item in list" :key="item.id" class="log-card">
         <div class="card-head">
           <div class="creator">
-            <span class="avatar">{{ item.creator.slice(0, 1) }}</span>
+            <span class="avatar">{{ item.creatorName?.slice(0, 1) }}</span>
             <div class="creator-meta">
-              <span class="creator-name">{{ item.creator }}</span>
-              <span class="create-time">{{ item.createTime }}提交</span>
+              <span class="creator-name">{{ item.creatorName }}</span>
+              <span class="create-time">{{ item.createdAt }}提交</span>
             </div>
           </div>
           <span
@@ -176,25 +256,30 @@ onMounted(loadList);
           <span
             v-else
             class="badge badge-pending"
-          >待处理 ({{ item.doneCount }}/{{ item.totalWatchers }})</span>
+          >待处理<template v-if="item.totalWatchers"> ({{ item.doneCount }}/{{ item.totalWatchers }})</template></span>
         </div>
 
         <p class="card-content">{{ item.content }}</p>
 
         <div class="card-field">
           <span class="field-label">关联订单：</span>
-          <span v-for="no in item.orderNos" :key="no" class="order-tag">{{ no }}</span>
-          <span v-if="!item.orderNos.length" class="field-empty">无</span>
+          <span v-if="item.orderId" class="order-tag">{{ item.orderId }}</span>
+          <span v-else class="field-empty">无</span>
         </div>
 
         <div class="card-footer">
           <div class="watchers">
             <span class="field-label">关注人：</span>
-            <span v-for="w in item.watcherNames" :key="w" class="watcher-tag">@{{ w }}</span>
+            <span
+              v-for="w in item.watchers"
+              :key="w.accountId"
+              class="watcher-tag"
+            >@{{ w.accountName }}</span>
+            <span v-if="!item.watchers?.length" class="field-empty">无</span>
           </div>
           <div class="card-actions">
             <button
-              v-if="item.status === LOG_STATUS.PENDING && !isMineDone(item)"
+              v-if="item.status === LOG_STATUS.PENDING && isMyWatcher(item) && !isMineDone(item)"
               class="btn btn-primary btn-sm"
               type="button"
               @click="handleMarkDone(item)"
@@ -209,6 +294,18 @@ onMounted(loadList);
       </div>
 
       <el-empty v-if="!loading && !list.length" description="暂无交接日志" />
+    </div>
+
+    <!-- 分页（服务端分页） -->
+    <div class="page-footer">
+      <PaginationSimple
+        :current-page="page"
+        :total="total"
+        :page-size="pageSize"
+        :show-batch-actions="false"
+        @current-change="handlePageChange"
+        @page-size-change="handlePageSizeChange"
+      />
     </div>
 
     <!-- 新增弹窗 -->
@@ -236,11 +333,11 @@ onMounted(loadList);
             <span
               class="quick-chip"
               :class="{ active: createForm.watchAll }"
-              @click="createForm.watchAll = !createForm.watchAll"
+              @click="toggleWatchAll"
             >快捷@全部人员</span>
           </div>
           <el-select
-            v-model="createForm.watchers"
+            v-model="createForm.watcherIds"
             multiple
             filterable
             collapse-tags
@@ -249,25 +346,23 @@ onMounted(loadList);
             style="width: 100%"
             :disabled="createForm.watchAll"
           >
-            <el-option v-for="name in STAFF_LIST" :key="name" :label="name" :value="name" />
+            <el-option
+              v-for="acc in watcherOptions"
+              :key="acc.accountId"
+              :label="acc.accountName"
+              :value="acc.accountId"
+            />
           </el-select>
-          <!-- <div class="form-hint">可以@自己，展示为账号真实姓名；支持快捷@全部人员</div> -->
         </div>
 
         <div class="form-section">
           <div class="section-head">
             <h4>关联订单</h4>
           </div>
-          <el-select
-            v-model="createForm.orderNos"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            collapse-tags
-            collapse-tags-tooltip
-            placeholder="请输入订单号后回车添加"
-            style="width: 100%"
+          <el-input
+            v-model="createForm.orderId"
+            placeholder="请输入订单号（数字）"
+            clearable
           />
         </div>
       </div>
@@ -289,11 +384,11 @@ onMounted(loadList);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in logsList" :key="row.user">
+            <tr v-for="row in logsList" :key="row.accountId">
               <td>
                 <div class="log-user">
-                  <span class="log-avatar">{{ row.user.slice(0, 1) }}</span>
-                  <span>{{ row.user }}</span>
+                  <span class="log-avatar">{{ row.accountName?.slice(0, 1) }}</span>
+                  <span>{{ row.accountName }}</span>
                 </div>
               </td>
               <td>
@@ -303,7 +398,7 @@ onMounted(loadList);
                 >{{ row.status === LOG_STATUS.DONE ? '已处理' : '未处理' }}</span>
               </td>
               <td class="log-time">
-                {{ row.status === LOG_STATUS.DONE ? row.time : '—' }}
+                {{ row.status === LOG_STATUS.DONE ? row.handledAt : '—' }}
               </td>
             </tr>
             <tr v-if="!logsList.length">
@@ -492,6 +587,11 @@ onMounted(loadList);
   flex-shrink: 0;
 }
 
+/* ===== 分页 ===== */
+.page-footer {
+  margin-top: 14px;
+}
+
 /* ===== 按钮（沿用项目主按钮风格） ===== */
 .btn {
   border: none;
@@ -604,20 +704,16 @@ onMounted(loadList);
   box-shadow: 0 6px 14px var(--primary-glow-strong);
 }
 
-.form-hint {
-  font-size: 12px;
-  color: #98a2b3;
-  line-height: 1.6;
-}
-
 /* 弹窗内输入框/下拉统一圆角与聚焦色 */
 .create-form :deep(.el-textarea__inner),
-.create-form :deep(.el-select__wrapper) {
+.create-form :deep(.el-select__wrapper),
+.create-form :deep(.el-input__wrapper) {
   border-radius: 10px;
 }
 
 .create-form :deep(.el-textarea__inner:focus),
-.create-form :deep(.el-select__wrapper.is-focused) {
+.create-form :deep(.el-select__wrapper.is-focused),
+.create-form :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 3px var(--primary-border);
 }
 

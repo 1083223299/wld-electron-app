@@ -80,12 +80,15 @@ async function http({ url, method = 'GET', data, headers = {} }) {
       payload = await res.text();
     }
 
-    // 401：登录失效，清除 token 并跳转登录页
+    // 401：仅当请求携带了 Authorization（登录后会话失效）才清除 token 并跳转登录页；
+    // 未带 token 的 401（如登录时账号密码错误）落到下方通用错误分支，直接展示后端返回的 message
     if (res.status === 401) {
-      removeToken();
-      notifyError('登录已过期，请重新登录');
-      window.location.hash = '#/login';
-      throw new Error('登录已过期');
+      if (requestConfig.headers.Authorization) {
+        removeToken();
+        notifyError('登录已过期，请重新登录');
+        window.location.hash = '#/login';
+        throw new Error('登录已过期');
+      }
     }
 
     // 非 2xx 状态码：抛出后端返回的 message 或 HTTP 状态码

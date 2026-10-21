@@ -48,23 +48,50 @@ const loading = ref(false);
 const columns = [
   { key: 'id', title: '游戏ID' },
   { key: 'name', title: '游戏名称' },
-  { key: 'billPeriodDays', title: '账期天数' },
+  { key: 'status', title: '状态' },
+  { key: 'settleDays', title: '结算天数' },
   { key: 'createTime', title: '创建时间' },
   { key: 'op', title: '操作' },
 ];
 
+/** 状态展示：兼容常见枚举（1/0、enabled/disabled、on/off 等），未知值原样显示 */
+function statusText(status) {
+  if (status === null || status === undefined || status === '') return '-';
+  const s = String(status).toLowerCase();
+  if (['1', 'true', 'enabled', 'enable', 'on', 'active', '正常', '启用'].includes(s)) return '启用';
+  if (['0', 'false', 'disabled', 'disable', 'off', 'inactive', '停用', '禁用'].includes(s)) return '停用';
+  return String(status);
+}
+
+/** 创建时间（'YYYY-MM-DD HH:mm:ss'）与筛选区间比较 */
+function inDateRange(value, range) {
+  if (!Array.isArray(range) || !range.length) return true;
+  const [start, end] = range;
+  if (!start && !end) return true;
+  if (value == null || value === '') return false; // 无创建时间数据时不参与时间筛选
+  const day = String(value).slice(0, 10);
+  if (start && day < String(start).slice(0, 10)) return false;
+  if (end && day > String(end).slice(0, 10)) return false;
+  return true;
+}
+
 async function fetchList() {
   loading.value = true;
   try {
-    const res = await gameApi.list({
-      page: page.value,
-      pageSize: pageSize.value,
-      gameId: filter.gameId,
-      gameName: filter.gameName,
-      createTime: filter.createTime,
-    });
-    rows.value = res.list || [];
-    total.value = res.total || 0;
+    // 后端列表接口全量返回，分页与筛选在本地完成
+    const all = (await gameApi.list()) || [];
+    let list = all;
+    if (filter.gameId) {
+      const kw = String(filter.gameId).trim();
+      list = list.filter((g) => String(g.id) === kw);
+    }
+    if (filter.gameName) {
+      const kw = String(filter.gameName).trim();
+      list = list.filter((g) => String(g.name || '').includes(kw));
+    }
+    list = list.filter((g) => inDateRange(g.createTime, filter.createTime));
+    total.value = list.length;
+    rows.value = list.slice((page.value - 1) * pageSize.value, page.value * pageSize.value);
   } finally {
     loading.value = false;
   }
@@ -94,24 +121,31 @@ const editVisible = ref(false);
 const editingId = ref(null); // null = 新增
 const editForm = reactive({
   name: '',
-  billPeriodDays: '',
+  settleDays: '',
   specs: [''],
 });
 
 function openCreate() {
   editingId.value = null;
   editForm.name = '';
-  editForm.billPeriodDays = '';
+  editForm.settleDays = '';
   editForm.specs = [''];
   editVisible.value = true;
 }
 
-function openEdit(row) {
+async function openEdit(row) {
   editingId.value = row.id;
-  editForm.name = row.name;
-  editForm.billPeriodDays = row.billPeriodDays;
-  editForm.specs = row.specs && row.specs.length ? [...row.specs] : [''];
+  editForm.name = row.name || '';
+  editForm.settleDays = row.settleDays ?? '';
+  editForm.specs = [''];
   editVisible.value = true;
+  try {
+    // 列表接口不返回规格，编辑时单独拉取当前规格
+    const specs = (await gameApi.specs(row.id)) || [];
+    editForm.specs = specs.length ? specs.map((s) => s.name) : [''];
+  } catch {
+    editForm.specs = [''];
+  }
 }
 
 function addSpec() {
@@ -149,23 +183,23 @@ async function submitEdit() {
     show('单个游戏规格不能超过50个字', 'warning');
     return;
   }
-  if (!editForm.billPeriodDays || Number(editForm.billPeriodDays) <= 0) {
-    show('请输入账期天数', 'warning');
+  if (!editForm.settleDays || Number(editForm.settleDays) <= 0) {
+    show('请输入结算天数', 'warning');
     return;
   }
 
   const payload = {
     name: editForm.name.trim(),
-    billPeriodDays: Number(editForm.billPeriodDays),
+    settleDays: Number(editForm.settleDays),
     specs,
   };
 
   try {
     if (editingId.value) {
-      await gameApi.update(editingId.value, payload);
+      await gameApi.updateWithSpecs(editingId.value, payload);
       show('编辑成功', 'success');
     } else {
-      await gameApi.create(payload);
+      await gameApi.createWithSpecs(payload);
       show('新增成功', 'success');
     }
     editVisible.value = false;
@@ -239,8 +273,19 @@ onMounted(fetchList);
         </div>
       </template>
 
-      <template #cell-billPeriodDays="{ row }">
-        {{ row.billPeriodDays }}天
+      <template #cell-status="{ row }">
+        <span
+          v-if="row.status !== null && row.status !== undefined && row.status !== ''"
+          class="status-chip"
+          :class="statusText(row.status) === '启用' ? 'status-on' : 'status-off'"
+        >
+          {{ statusText(row.status) }}
+        </span>
+        <span v-else>-</span>
+      </template>
+
+      <template #cell-settleDays="{ row }">
+        {{ row.settleDays != null ? `${row.settleDays}天` : '-' }}
       </template>
 
       <template #cell-op="{ row }">
@@ -260,10 +305,10 @@ onMounted(fetchList);
             <input v-model="editForm.name" maxlength="15" placeholder="上限15个字" />
           </div>
           <div class="form-row">
-            <label class="required">账期天数</label>
+            <label class="required">结算天数</label>
             <div class="bill-period-wrap">
               <input
-                v-model.number="editForm.billPeriodDays"
+                v-model.number="editForm.settleDays"
                 type="number"
                 min="1"
                 placeholder="请输入天数"
@@ -350,6 +395,28 @@ onMounted(fetchList);
 
 .link-btn.danger:hover {
   background: rgba(217, 45, 32, 0.08);
+}
+
+/* 状态标签 */
+.status-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.status-on {
+  color: #067647;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.status-off {
+  color: #7a5af8;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
 }
 
 /* 弹窗 */

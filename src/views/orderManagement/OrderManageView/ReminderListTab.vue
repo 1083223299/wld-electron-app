@@ -1,11 +1,16 @@
 <script setup>
-import { computed, reactive } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useListMemory } from '../../../composables/useListMemory';
-import { orderStore } from './mockData';
+import { orderApi, channelText } from '../../../api/modules/order';
 
-/** 催单列表：所有未支付的第三方渠道订单（当前仅抖音） */
+/**
+ * 催单列表（接口联调）：GET /api/admin/orders/urge-hall
+ * 未支付第三方订单（status=WAIT_PAY），支付或取消后离开本列表
+ * 服务端分页/筛选（orderNo/thirdOrderNo 完全匹配，from/to 时间范围）
+ * 鉴权：Authorization Bearer {token} 由 request.js 自动附加
+ */
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
   filterKeys: ['orderNo', 'thirdOrderNo', 'createTime'],
 });
@@ -18,8 +23,8 @@ const filter = reactive({
 restoreFilter(filter);
 
 const searchFields = [
-  { prop: 'orderNo', label: '本平台订单号', type: 'input', placeholder: '请输入订单号', span: 8 },
-  { prop: 'thirdOrderNo', label: '第三方订单号', type: 'input', placeholder: '请输入订单号', span: 8 },
+  { prop: 'orderNo', label: '本平台订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 8 },
+  { prop: 'thirdOrderNo', label: '第三方订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 8 },
   {
     prop: 'createTime',
     label: '创建时间',
@@ -30,9 +35,59 @@ const searchFields = [
   },
 ];
 
+const rows = ref([]);
+const total = ref(0);
+const loading = ref(false);
+
+const fmtDay = (d) => {
+  if (!d) return '';
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
+/** 后端字段 → 页面展示字段 */
+function mapRow(item = {}) {
+  return {
+    id: item.id,
+    orderNo: item.orderNo || '',
+    thirdOrderNo: item.thirdOrderNo || '',
+    channel: channelText(item.channelCode),
+    channelCode: item.channelCode,
+    amount: Number(item.amount) || 0,
+    product: item.itemName || '',
+    status: item.status,
+    createTime: item.createdAt || '',
+  };
+}
+
+async function fetchList() {
+  loading.value = true;
+  try {
+    const [fromDay, toDay] = Array.isArray(filter.createTime) ? filter.createTime : [];
+    const res = await orderApi.urgeHall({
+      page: page.value,
+      pageSize: pageSize.value,
+      orderNo: String(filter.orderNo || '').trim(),
+      thirdOrderNo: String(filter.thirdOrderNo || '').trim(),
+      from: fmtDay(fromDay),
+      to: fmtDay(toDay),
+    });
+    rows.value = ((res && res.list) || []).map(mapRow);
+    total.value = (res && res.total) || 0;
+  } catch {
+    rows.value = [];
+    total.value = 0;
+  } finally {
+    loading.value = false;
+  }
+}
+
 function handleSearch(values) {
   Object.assign(filter, values);
   rememberFilter(filter, true);
+  fetchList();
 }
 
 function handleReset() {
@@ -40,29 +95,10 @@ function handleReset() {
     filter[key] = Array.isArray(filter[key]) ? [] : '';
   });
   rememberFilter(filter, true);
+  fetchList();
 }
 
-const filteredRows = computed(() => {
-  return orderStore.reminderOrders.filter((row) => {
-    // mock 阶段无独立本平台订单号，orderNo 与 thirdOrderNo 均匹配第三方订单号，联调后按接口字段区分
-    const noMatch = !filter.orderNo || row.thirdOrderNo === String(filter.orderNo).trim();
-    const thirdMatch = !filter.thirdOrderNo || row.thirdOrderNo === String(filter.thirdOrderNo).trim();
-    let timeMatch = true;
-    if (Array.isArray(filter.createTime) && filter.createTime.length === 2 && filter.createTime[0]) {
-      const start = new Date(filter.createTime[0]).getTime();
-      const end = new Date(filter.createTime[1]).getTime();
-      const t = new Date(row.createTime.replace(/-/g, '/')).getTime();
-      timeMatch = t >= start && t <= end;
-    }
-    return noMatch && thirdMatch && timeMatch;
-  });
-});
-
-const total = computed(() => filteredRows.value.length);
-const rows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
+onMounted(fetchList);
 
 const columns = [
   { key: 'channel', title: '渠道' },
@@ -93,18 +129,22 @@ const columns = [
       :total="total"
       :page="page"
       :page-size="pageSize"
-      @page-change="onPageChange"
-      @page-size-change="onPageSizeChange"
+      @page-change="(p) => { onPageChange(p); fetchList(); }"
+      @page-size-change="(s) => { onPageSizeChange(s); fetchList(); }"
     >
       <template #toolbar>
         <h2 class="list-title">催单列表</h2>
       </template>
 
-      <template #cell-channel>
-        <span class="channel-tag">抖</span>
+      <template #cell-channel="{ row }">
+        <span class="channel-tag">{{ (row.channel || '抖').slice(0, 1) }}</span>
       </template>
 
       <template #cell-amount="{ row }">{{ Number(row.amount).toFixed(2) }}</template>
+
+      <template #cell-product="{ row }">{{ row.product || '—' }}</template>
+
+      <template #cell-createTime="{ row }">{{ row.createTime || '—' }}</template>
     </DataTable>
   </div>
 </template>

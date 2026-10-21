@@ -863,6 +863,10 @@ function createWindow() {
       contextIsolation: true,        // 安全：上下文隔离
       sandbox: false,                // preload 里用了 require，不能开 sandbox
       backgroundThrottling: false,   // 防止最小化后 Chromium 节流 setInterval，导致 WebSocket 心跳停发
+      // 测试环境 nginx 未开放 CORS，跨域请求的 OPTIONS 预检被 403 拦截（如 wecom-options）。
+      // 桌面内网工具场景下关闭 webSecurity 以绕过 CORS：仅加载受控的本地页面与公司 API，可接受。
+      // 后端 nginx 开放 CORS 后应移除此项；生产/加载不可信远程内容的场景不建议开启。
+      // webSecurity: false,
     },
   };
   if (savedState) {

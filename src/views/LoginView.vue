@@ -19,15 +19,29 @@ const rememberMe = ref(false);
 const form = reactive({
   username: '',
   password: '',
-  company: '',
+  wecomId: '',
 });
+
+/** 企微 ID 下拉选项（GET /api/admin/auth/wecom-options） */
+const wecomOptions = ref([]);
 
 const rules = {
   username: [{ required: true, message: '账号不能为空', trigger: 'change' }],
   password: [{ required: true, message: '密码不能为空', trigger: 'change' }],
 };
 
+/** 拉取企微下拉选项（失败提示由 request.js 统一处理，下拉留空不影响登录） */
+async function loadWecomOptions() {
+  try {
+    wecomOptions.value = (await authApi.getWecomOptions()) || [];
+  } catch {
+    wecomOptions.value = [];
+  }
+}
+
 onMounted(() => {
+  loadWecomOptions();
+
   const saved = localStorage.getItem('loginRemember');
   if (!saved) return;
 
@@ -65,14 +79,25 @@ async function submit() {
 
   try {
     saveRememberState();
-    const result = await authApi.login(form);
+    const result = await authApi.login({
+      username: form.username,
+      password: form.password,
+      wecomId: form.wecomId || '',
+    });
     userStore.setSession(result);
     show('登录成功', 'success');
+
+    // 用 me 接口拉取权威用户信息（含 wecomName 等），失败不阻塞登录
+    authApi
+      .me()
+      .then((user) => userStore.setUser(user))
+      .catch(() => {});
 
     const redirect = route.query.redirect || '/home';
     router.replace(String(redirect));
   } catch (error) {
-    show(error?.message || '登录失败', 'error');
+    // 错误提示已由 request.js 统一 toast，这里避免重复弹窗
+    console.error('[login]', error);
   } finally {
     loading.value = false;
   }
@@ -120,10 +145,19 @@ async function submit() {
           </el-form-item>
 
           <el-form-item>
-            <el-select v-model="form.company" placeholder="请选择企业ID（可选）" clearable size="large" class="company-select">
-              <el-option label="企业 1" value="1" />
-              <el-option label="企业 2" value="2" />
-              <el-option label="企业 3" value="3" />
+            <el-select
+              v-model="form.wecomId"
+              placeholder="请选择企微ID（可选）"
+              clearable
+              size="large"
+              class="wecom-select"
+            >
+              <el-option
+                v-for="opt in wecomOptions"
+                :key="opt.wecomId"
+                :label="opt.label || opt.name"
+                :value="opt.wecomId"
+              />
             </el-select>
           </el-form-item>
 
@@ -228,7 +262,7 @@ async function submit() {
   margin-bottom: 20px;
 }
 
-.company-select {
+.wecom-select {
   width: 100%;
 }
 

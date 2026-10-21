@@ -1,102 +1,52 @@
 import { request } from '../request';
 
-const { mock } = request;
-
-// ===== 渠道表（内存 mock DB） =====
-// builtin = true 表示系统内置（如抖音接入第三方 API），不支持人工编辑、删除
-const CHANNEL_DB = [
-  {
-    id: 1525,
-    name: '抖音',
-    builtin: true,
-    createTime: '2026-09-01 10:00:00',
-    deleted: false,
-  },
-  {
-    id: 1526,
-    name: '小红书',
-    builtin: false,
-    createTime: '2026-09-05 14:30:00',
-    deleted: false,
-  },
-];
-
-let channelSeq = 1527;
-
-const now = () => {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-};
+// =====================================================================
+// 渠道配置：已按 OpenAPI 联调真实后端（鉴权走 request.js 自动附加 Bearer token）
+//   GET    /api/admin/channels          渠道列表（全量返回，无分页参数，分页由页面本地完成）
+//   POST   /api/admin/channels          新增渠道   body: { channelCode, shopId, shopName }
+//   PUT    /api/admin/channels/{id}     编辑渠道   body: { shopId, shopName }（channelCode 创建后不可修改）
+//   DELETE /api/admin/channels/{id}     删除渠道
+//
+// 列表项实际返回字段：{ id, channelCode, shopId, shopName }；
+// 编辑/删除使用列表项里的 id。
+// =====================================================================
 
 export const channelApi = {
   /**
-   * 渠道列表
-   * @param {{page?:number,pageSize?:number}} params
+   * 渠道列表（接口全量返回，本地分页由页面处理）
+   * @returns {Promise<Array<{id:number, channelCode:string, shopId:string, shopName:string}>>}
    */
-  list: (params = {}) =>
-    mock(null, 200).then(() => {
-      const { page = 1, pageSize = 10 } = params;
-      let list = CHANNEL_DB.filter((c) => !c.deleted);
-      list = [...list].sort((a, b) => a.id - b.id);
-      return {
-        total: list.length,
-        list: list.slice((page - 1) * pageSize, page * pageSize),
-      };
-    }),
+  list: async () => {
+    const data = await request.get('/api/admin/channels');
+    return Array.isArray(data) ? data : [];
+  },
 
   /** 全部渠道（供其他模块下拉选择） */
-  all: () =>
-    mock(null, 100).then(() =>
-      CHANNEL_DB.filter((c) => !c.deleted).map((c) => ({
-        id: c.id,
-        name: c.name,
-        builtin: c.builtin,
-      }))
-    ),
+  all: async () => {
+    const list = await channelApi.list();
+    return list.map((c) => ({
+      id: c.id,
+      channelCode: c.channelCode,
+      shopId: c.shopId,
+      shopName: c.shopName,
+    }));
+  },
 
-  create: (data) =>
-    mock(null, 200).then(() => {
-      const name = String(data.name || '').trim();
-      if (!name) throw new Error('请输入渠道名称');
-      if (name.length > 15) throw new Error('渠道名称上限15个字');
-      // 唯一性校验
-      const dup = CHANNEL_DB.find((c) => !c.deleted && c.name === name);
-      if (dup) throw new Error('渠道名称已存在');
-      const item = {
-        id: channelSeq++,
-        name,
-        builtin: false,
-        createTime: now(),
-        deleted: false,
-      };
-      CHANNEL_DB.push(item);
-      return item;
+  /** 新增渠道 @param {{channelCode:string, shopId:string, shopName:string}} data */
+  create: ({ channelCode, shopId, shopName }) =>
+    request.post('/api/admin/channels', {
+      channelCode: String(channelCode || '').trim(),
+      shopId: String(shopId || '').trim(),
+      shopName: String(shopName || '').trim(),
     }),
 
-  update: (id, data) =>
-    mock(null, 200).then(() => {
-      const item = CHANNEL_DB.find((c) => c.id === Number(id));
-      if (!item) throw new Error('渠道不存在');
-      if (item.builtin) throw new Error('系统内置渠道不支持编辑');
-      const name = String(data.name || '').trim();
-      if (!name) throw new Error('请输入渠道名称');
-      if (name.length > 15) throw new Error('渠道名称上限15个字');
-      const dup = CHANNEL_DB.find(
-        (c) => !c.deleted && c.id !== Number(id) && c.name === name
-      );
-      if (dup) throw new Error('渠道名称已存在');
-      item.name = name;
-      return item;
+  /** 编辑渠道（channelCode 创建后不可改） @param {number} id @param {{shopId:string, shopName:string}} data */
+  update: (id, { shopId, shopName }) =>
+    request.put(`/api/admin/channels/${id}`, {
+      shopId: String(shopId || '').trim(),
+      shopName: String(shopName || '').trim(),
     }),
 
-  /** 软删除 */
-  remove: (id) =>
-    mock(null, 200).then(() => {
-      const item = CHANNEL_DB.find((c) => c.id === Number(id));
-      if (!item) throw new Error('渠道不存在');
-      if (item.builtin) throw new Error('系统内置渠道不支持删除');
-      item.deleted = true;
-      return true;
-    }),
+  /** 删除渠道 @param {number} id */
+  remove: (id) => request.del(`/api/admin/channels/${id}`),
 };

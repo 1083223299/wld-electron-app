@@ -1,13 +1,21 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import AppModal from '../../../components/AppModal.vue';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
-import { claimOrder, orderStore, STATUS_CLASS, TYPE_OPTIONS } from './mockData';
+import { orderApi, TYPE_OPTIONS, statusText, channelText } from '../../../api/modules/order';
+import { STATUS_CLASS } from './mockData';
 
-/** 领单大厅：所有已支付的第三方订单（当前仅抖音），需客服认领 */
+/**
+ * 客服领单大厅（接口联调）：GET /api/admin/orders/claim-hall
+ * 无 Query 参数，返回数组；已支付待领取订单，认领后进入订单列表
+ * 鉴权：Authorization Bearer {token} 由 request.js 自动附加
+ * 认领：POST /api/admin/orders/{id}/claim（无 body），认领后可选维护信息（orderType/playerCount/roleName/teamCode）
+ * 说明：claim-hall 已返回 createdAt（后端确认），创建时间列/筛选按接口数据展示；
+ *      组队码 teamCode 新 OpenAPI 已支持（maintain），填写则随认领提交；二维码等字段仍缺（待后端补充）
+ */
 const { show } = useToast();
 
 const filter = reactive({
@@ -34,27 +42,56 @@ const searchFields = [
   },
 ];
 
-const columns = [
-  { key: 'orderNo', title: '本平台订单号' },
-  { key: 'channel', title: '渠道' },
-  { key: 'thirdOrderNo', title: '第三方订单号' },
-  { key: 'amount', title: '订单金额（元）' },
-  { key: 'product', title: '购买项目' },
-  { key: 'status', title: '订单状态' },
-  { key: 'tags', title: '订单标签' },
-  { key: 'createTime', title: '创建时间' },
-  { key: 'op', title: '操作' },
-];
+/** 后端字段 → 页面展示字段 */
+function mapRow(item = {}) {
+  const tags = [];
+  if (Number(item.frozen) === 1) tags.push('冻结');
+  if (Number(item.afterSaleFlag) === 1) tags.push('售后中');
+  return {
+    id: item.id,
+    orderNo: item.orderNo || '',
+    channel: channelText(item.channelCode),
+    channelCode: item.channelCode,
+    thirdOrderNo: item.thirdOrderNo || '',
+    amount: Number(item.amount) || 0,
+    product: item.itemName || '',
+    playerCount: item.playerCount,
+    takenCount: item.takenCount,
+    status: statusText(item.status),
+    statusCode: item.status,
+    tags,
+    frozen: Number(item.frozen) === 1,
+    afterSale: Number(item.afterSaleFlag) === 1,
+    ownerName: item.ownerName || '',
+    // 创建时间：claim-hall 已返回 createdAt（后端确认），按接口数据展示
+    createTime: item.createdAt || '',
+  };
+}
+
+const allRows = ref([]);
+const loading = ref(false);
+
+async function fetchHall() {
+  loading.value = true;
+  try {
+    const list = await orderApi.claimHall();
+    allRows.value = (list || []).map(mapRow);
+  } catch {
+    allRows.value = [];
+  } finally {
+    loading.value = false;
+  }
+}
 
 const filteredRows = computed(() => {
-  return orderStore.claimOrders.filter((row) => {
+  return allRows.value.filter((row) => {
     const noMatch = !filter.orderNo || row.orderNo === String(filter.orderNo).trim();
     const thirdMatch = !filter.thirdOrderNo || row.thirdOrderNo === String(filter.thirdOrderNo).trim();
     let timeMatch = true;
     if (Array.isArray(filter.createTime) && filter.createTime.length === 2 && filter.createTime[0]) {
       const start = new Date(filter.createTime[0]).getTime();
       const end = new Date(filter.createTime[1]).getTime();
-      const t = new Date(row.createTime.replace(/-/g, '/')).getTime();
+      const t = row.createTime ? new Date(row.createTime.replace(/-/g, '/')).getTime() : NaN;
       timeMatch = t >= start && t <= end;
     }
     return noMatch && thirdMatch && timeMatch;
@@ -80,30 +117,59 @@ function handleReset() {
   rememberFilter(filter, true);
 }
 
-/* ===== 认领弹窗（领取都非必填） ===== */
+onMounted(fetchHall);
+
+const columns = [
+  { key: 'orderNo', title: '本平台订单号' },
+  { key: 'channel', title: '渠道' },
+  { key: 'thirdOrderNo', title: '第三方订单号' },
+  { key: 'amount', title: '订单金额（元）' },
+  { key: 'product', title: '购买项目' },
+  { key: 'playerCount', title: '名额数' },
+  { key: 'status', title: '订单状态' },
+  { key: 'tags', title: '订单标签' },
+  { key: 'createTime', title: '创建时间' },
+  { key: 'op', title: '操作' },
+];
+
+/* ===== 认领弹窗（orderType/playerCount/roleName/teamCode 非必填，填写则随认领提交） ===== */
 const claimVisible = ref(false);
 const currentRow = ref(null);
-const claimForm = reactive({ orderType: '常规单', playerCount: '', roleName: '', groupCode: '' });
+const claimForm = reactive({ orderType: 'NORMAL', playerCount: '', roleName: '', groupCode: '' });
 
 function openClaim(row) {
   currentRow.value = row;
-  Object.assign(claimForm, { orderType: '常规单', playerCount: '', roleName: '', groupCode: '' });
+  Object.assign(claimForm, { orderType: 'NORMAL', playerCount: '', roleName: '', groupCode: '' });
   claimVisible.value = true;
 }
 
-function submitClaim() {
-  if (!currentRow.value) return;
+async function submitClaim() {
   const row = currentRow.value;
-  // 领取项均非必填，仅把已填写的值写回订单（联调时由认领接口落库）
-  if (claimForm.orderType) row.orderType = claimForm.orderType;
-  if (claimForm.playerCount !== '' && claimForm.playerCount !== null) {
-    row.playerCount = Number(claimForm.playerCount) || 0;
+  if (!row) return;
+  try {
+    // 1) 认领订单（无 body）
+    await orderApi.claim(row.id);
+    // 2) 认领时填写的维护字段通过维护订单信息接口补录（未填写则不调用）；
+    //    组队码 teamCode 新 OpenAPI 已支持（maintain），填写则随认领提交
+    const orderType = claimForm.orderType !== 'NORMAL' ? claimForm.orderType : undefined;
+    const playerCount =
+      claimForm.playerCount !== '' && claimForm.playerCount !== null
+        ? Number(claimForm.playerCount) || 0
+        : undefined;
+    const roleName = String(claimForm.roleName || '').trim() || undefined;
+    const teamCode = String(claimForm.groupCode || '').trim() || undefined;
+    if (
+      orderType !== undefined || playerCount !== undefined ||
+      roleName !== undefined || teamCode !== undefined
+    ) {
+      await orderApi.maintain(row.id, { orderType, playerCount, roleName, teamCode });
+    }
+    claimVisible.value = false;
+    show('认领成功，已进入订单列表', 'success');
+    fetchHall();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
   }
-  if (claimForm.roleName.trim()) row.roleName = claimForm.roleName.trim();
-  if (claimForm.groupCode.trim()) row.groupCode = claimForm.groupCode.trim();
-  claimOrder(row);
-  claimVisible.value = false;
-  show('认领成功，已进入订单列表', 'success');
 }
 
 function handleIntegerInput(event) {
@@ -128,11 +194,6 @@ function tagClass(tag) {
 
 <template>
   <div class="claim-tab list-page">
-    <!-- <div class="rule-banner">
-      <p>所有已支付的第三方订单（当前仅抖音），都需要客服进行订单认领，认领后进入「订单列表」Tab。</p>
-      <p>注意：若订单未领取时被取消，则该订单会归属到订单列表中。</p>
-    </div> -->
-
     <div class="list-page__search">
       <SearchComponent
         :fields="searchFields"
@@ -160,6 +221,10 @@ function tagClass(tag) {
 
       <template #cell-amount="{ row }">{{ Number(row.amount).toFixed(2) }}</template>
 
+      <template #cell-playerCount="{ row }">
+        {{ row.playerCount != null ? `${row.takenCount ?? 0}/${row.playerCount}` : '—' }}
+      </template>
+
       <template #cell-channel="{ row }">
         <span class="channel-tag">{{ (row.channel || '抖').slice(0, 1) }}</span>
       </template>
@@ -180,6 +245,8 @@ function tagClass(tag) {
         </div>
       </template>
 
+      <template #cell-createTime="{ row }">{{ row.createTime || '—' }}</template>
+
       <template #cell-op="{ row }">
         <button class="link-btn primary" @click="openClaim(row)">认领</button>
       </template>
@@ -189,11 +256,10 @@ function tagClass(tag) {
 
     <AppModal v-model="claimVisible" title="领取" width="480px">
       <div class="claim-dialog">
-        <!-- <p class="claim-note">领取都非必填</p> -->
         <div class="form-row">
           <label>订单类型</label>
           <el-radio-group v-model="claimForm.orderType">
-            <el-radio v-for="item in TYPE_OPTIONS" :key="item" :value="item">{{ item }}</el-radio>
+            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
           </el-radio-group>
         </div>
         <div class="form-row">
@@ -206,6 +272,7 @@ function tagClass(tag) {
         </div>
         <div class="form-row">
           <label>组队码</label>
+          <!-- 组队码 teamCode：maintain 已支持（新 OpenAPI），填写则随认领提交 -->
           <input v-model="claimForm.groupCode" placeholder="请输入组队码" />
         </div>
       </div>
@@ -218,25 +285,6 @@ function tagClass(tag) {
 </template>
 
 <style scoped>
-/* .claim-tab {
-  gap: 12px;
-} */
-
-.rule-banner {
-  flex: 0 0 auto;
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(124, 58, 237, 0.06));
-  border: 1px solid var(--primary-border);
-  color: #4b5563;
-  font-size: 13px;
-  line-height: 1.9;
-}
-
-.rule-banner p {
-  margin: 0;
-}
-
 .status-wrap {
   display: flex;
   align-items: center;
@@ -328,12 +376,6 @@ function tagClass(tag) {
   gap: 16px;
 }
 
-.claim-note {
-  margin: 0;
-  font-size: 12px;
-  color: #8a93a6;
-}
-
 .form-row {
   display: grid;
   gap: 8px;
@@ -363,6 +405,19 @@ function tagClass(tag) {
   outline: none;
   background: var(--bg-card);
   box-shadow: 0 0 0 4px var(--primary-border);
+}
+
+.claim-dialog :deep(.el-radio-group) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 22px;
+  min-height: 30px;
+}
+
+.claim-dialog :deep(.el-radio) {
+  margin-right: 0;
+  height: 30px;
 }
 
 .btn {

@@ -1,20 +1,17 @@
 <script setup>
 import { computed, reactive, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
-import { getOrderLogs, STATUS_CLASS } from './mockData';
 
 /**
- * 订单审核弹窗内容
- * 依据原型「审核页面」：
- * - 分润信息（平台加价/减价、俱乐部加价/减价、平台分润、俱乐部分润、打手分润）
- * - 订单日志（局部滑动）
- * - 完成凭证（首图/尾图/进程图，带上传时间）
- * - 打单备注（上次驳回原因）
- * - *审核结果（通过/驳回）、*驳回原因（0/50）
- * - 订单备注
+ * 订单审核弹窗内容（接口联调 + 原型 UI 恢复）
+ * 提交接口：POST /api/admin/orders/{id}/audit（pass 必填，驳回必填 reason 最多50字）
+ * - 数据来源：订单详情（platformAdjust/clubAdjust/settleDueAt 等）+ 订单日志（logs）
+ * - 分润明细接口未提供，按原型比例（平台30%/俱乐部40%/打手30%）估算展示
+ * - 完成凭证/打单备注等字段接口未返回，保留原型区块并兜底展示（待后端补充）
  */
 const props = defineProps({
   row: { type: Object, required: true },
+  logs: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['submit']);
 
@@ -33,14 +30,15 @@ watch(
   { immediate: true }
 );
 
-const logs = computed(() => getOrderLogs(props.row));
-
-const adjustText = (adjust) => {
-  if (!adjust || !adjust.amount) return '—';
-  return `${adjust.type === '加价' ? '+' : '-'}${money(adjust.amount)}元`;
+/** 加减价净值展示：减价为负 */
+const adjustText = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return '0.00元';
+  return `${n > 0 ? '+' : '-'}${money(Math.abs(n))}元`;
 };
 
-/** 分润信息：按原型示例比例（平台30% / 俱乐部分润40% / 打手分润30%） */
+/** 分润信息（接口未提供分润明细，按原型示例比例估算：平台30% / 俱乐部40% / 打手30%） */
 const split = computed(() => {
   const amount = Number(props.row.amount) || 0;
   return {
@@ -50,13 +48,14 @@ const split = computed(() => {
   };
 });
 
+/** 完成凭证：进行中/已完成/交易关闭 展示（字段接口未提供，兜底展示） */
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
 
 function submit() {
   if (form.result === '驳回' && !form.reason.trim()) {
     return show('请填写驳回原因', 'warning');
   }
-  emit('submit', { result: form.result, reason: form.result === '驳回' ? form.reason.trim() : '' });
+  emit('submit', { pass: form.result === '通过', reason: form.result === '驳回' ? form.reason.trim() : '' });
 }
 
 defineExpose({ submit });
@@ -68,27 +67,31 @@ defineExpose({ submit });
     <section class="au-section">
       <h4>分润信息</h4>
       <div class="kv-grid">
-        <div class="kv"><span>平台加价/减价</span><strong>{{ adjustText(row.platformAdjust || row.priceAdjust) }}</strong></div>
+        <div class="kv"><span>平台加价/减价</span><strong>{{ adjustText(row.platformAdjust) }}</strong></div>
         <div class="kv"><span>俱乐部加价/减价</span><strong>{{ adjustText(row.clubAdjust) }}</strong></div>
-        <div class="kv"><span>平台分润(元)</span><strong>{{ split.platform }}</strong></div>
-        <div class="kv"><span>俱乐部分润(元)</span><strong>{{ split.club }}元={{ money(Number(split.club) - 20) }}元+20.00元</strong></div>
-        <div class="kv"><span>打手分润(元)</span><strong>{{ split.player }}元={{ money(Number(split.player) - 20) }}元+20.00元</strong></div>
+        <div class="kv"><span>结算到期时间</span><strong>{{ row.settleDueAt || '—' }}</strong></div>
+        <div class="kv"><span>账期天数</span><strong>{{ row.settleDaysSnapshot != null ? `${row.settleDaysSnapshot}天` : '—' }}</strong></div>
+        <div class="kv"><span>平台分润(元)*</span><strong>{{ split.platform }}</strong></div>
+        <div class="kv"><span>俱乐部分润(元)*</span><strong>{{ split.club }}元={{ money(Number(split.club) - 20) }}元+20.00元</strong></div>
+        <div class="kv"><span>打手分润(元)*</span><strong>{{ split.player }}元={{ money(Number(split.player) - 20) }}元+20.00元</strong></div>
       </div>
+      <p class="form-tip">* 分润明细接口未提供，按原型比例（平台30%/俱乐部40%/打手30%）估算</p>
     </section>
 
     <!-- 订单日志 -->
     <section class="au-section">
       <h4>订单日志</h4>
-      <ul class="log-list">
+      <ul v-if="logs.length" class="log-list">
         <li v-for="(log, i) in logs" :key="i">
           <span class="log-time">{{ log.time }}</span>
           <span class="log-text">{{ log.text }}</span>
           <span class="log-op">操作人：{{ log.op }}</span>
         </li>
       </ul>
+      <p v-else class="muted-text">暂无日志</p>
     </section>
 
-    <!-- 完成凭证 -->
+    <!-- 完成凭证（字段接口未提供，兜底展示） -->
     <section class="au-section">
       <h4>完成凭证</h4>
       <div v-if="hasProof" class="proof-grid">
@@ -116,12 +119,12 @@ defineExpose({ submit });
       <p v-else class="muted-text">暂无数据</p>
     </section>
 
-    <!-- 打单备注 -->
+    <!-- 打单备注（字段接口未提供，兜底展示） -->
     <section class="au-section">
       <h4>打单备注</h4>
       <div class="kv-line"><span>打手备注</span><strong>{{ row.playerRemark || '暂无' }}</strong></div>
       <div v-if="row.lastRejectReason || row.rejectCount" class="kv-line">
-        <span>上次驳回原因</span><strong class="reject-text">{{ row.lastRejectReason || 'xxxxxxxxxxxxxxxxxxxx' }}</strong>
+        <span>上次驳回原因</span><strong class="reject-text">{{ row.lastRejectReason || '—' }}</strong>
       </div>
     </section>
 
@@ -318,6 +321,17 @@ defineExpose({ submit });
 .log-op {
   color: var(--text-faint);
   font-size: 12px;
+}
+
+.form-tip {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(250, 204, 21, 0.1);
+  border: 1px solid rgba(250, 204, 21, 0.28);
+  color: var(--warning-text);
+  font-size: 12px;
+  line-height: 1.8;
 }
 
 .proof-grid {

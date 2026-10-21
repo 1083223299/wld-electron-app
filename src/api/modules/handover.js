@@ -1,168 +1,83 @@
 import { request } from '../request';
 
-const { mock } = request;
-
 /**
- * 交接中心 > 交接日志
- * 本地 mock 实现（同 order.js 风格）：
- * - 每条日志记录：内容、提交人、提交时间、关联订单、关注人
- * - 关注人全部处理完后，卡片状态变为「已处理」
- * - watchAll = true 表示 @所有人，此时 logs 固定为全员
+ * 交接中心 > 交接日志（管理端）接口
+ * 依据 Apifox「未来洞电竞后台 / 交接中心 / 交接日志」OpenAPI 规格：
+ * - GET  /api/admin/handovers            交接日志列表（服务端分页 + from/to/status/mine 筛选）
+ * - POST /api/admin/handovers            新建交接日志
+ * - POST /api/admin/handovers/{id}/ack   关注人标记已处理
+ * - GET  /api/admin/accounts             关注人候选（账号列表）
+ * 鉴权：Header Authorization: Bearer {token}，request.js 已自动附加当前登录 token
  */
 
-// 员工列表（关注人候选）
-export const STAFF_LIST = ['张三', '李四', '王五', '赵六', '孙七'];
-
-// 日志状态：0 待处理 / 1 已处理
+/** 关注人处理状态（接口返回/提交均为英文枚举） */
 export const LOG_STATUS = {
-  PENDING: 0,
-  DONE: 1,
+  PENDING: 'PENDING', // 待处理
+  DONE: 'DONE', // 已处理
 };
 
-function pad(n) {
-  return String(n).padStart(2, '0');
-}
-
-function formatTime(d = new Date()) {
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  );
-}
-
-// 生成一条关注人处理明细
-function makeLogRow(user, done = false) {
-  return {
-    user,
-    status: done ? LOG_STATUS.DONE : LOG_STATUS.PENDING,
-    time: done ? formatTime() : '',
-  };
-}
-
-let seq = 100;
-const DB = [
-  {
-    id: 1,
-    content: '凌晨单量低，早班关注永劫无匹配 SKU 单（246789641846），今早同步抖音侧。',
-    creator: '张三',
-    createTime: '2026-10-09 11:22:33',
-    orderNos: ['246789641846'],
-    watchAll: false,
-    logs: [makeLogRow('李四', true), makeLogRow('王五', false)],
-  },
-  {
-    id: 2,
-    content: '凌晨单量低，早班关注永劫无匹配 SKU 单（246789641846），今早同步抖音侧。',
-    creator: '张三',
-    createTime: '2026-10-09 11:22:33',
-    orderNos: ['246789641846'],
-    watchAll: false,
-    logs: [makeLogRow('李四', true), makeLogRow('王五', true)],
-  },
-  {
-    id: 3,
-    content: '凌晨单量低，早班关注永劫无匹配 SKU 单（246789641846），今早同步抖音侧。',
-    creator: '张三',
-    createTime: '2026-10-09 11:22:33',
-    orderNos: ['246789641846'],
-    watchAll: true,
-    logs: STAFF_LIST.map((u) => makeLogRow(u, true)),
-  },
-];
-
-// 计算单条日志的展示状态
-function decorate(item) {
-  const total = item.logs.length;
-  const doneCount = item.logs.filter((l) => l.status === LOG_STATUS.DONE).length;
-  const done = total > 0 && doneCount === total;
-  return {
-    ...item,
-    totalWatchers: total,
-    doneCount,
-    status: done ? LOG_STATUS.DONE : LOG_STATUS.PENDING,
-    watcherNames: item.watchAll ? ['所有人'] : item.logs.map((l) => l.user),
-  };
-}
-
-function sameDay(dayStr, timeStr) {
-  return typeof dayStr === 'string' && dayStr && timeStr.startsWith(dayStr);
+/** 查询参数组装（空值自动剔除，数组 join 逗号） */
+function buildQuery(params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    qs.set(key, Array.isArray(value) ? value.join(',') : String(value));
+  });
+  const query = qs.toString();
+  return query ? `?${query}` : '';
 }
 
 export const handoverApi = {
   /**
-   * 交接日志列表
-   * @param {Object} opts
-   * @param {string} opts.startDate 开始日期 YYYY-MM-DD
-   * @param {string} opts.endDate   结束日期 YYYY-MM-DD
-   * @param {''|0|1} opts.status   状态筛选：'' 全部 / 0 待处理 / 1 已处理
-   * @param {boolean} opts.relatedToMe 与我相关
-   * @param {string} opts.currentUser  当前登录人
+   * 交接日志列表 GET /api/admin/handovers
+   * 服务端分页；from/to 时间范围、status 处理状态、mine=1 仅看与我相关
+   * @param {Object} params
+   * @param {number} [params.page] 页码，默认 1
+   * @param {number} [params.pageSize] 每页条数，默认 20，最大 100
+   * @param {string} [params.from] 开始时间 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss
+   * @param {string} [params.to] 结束时间 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss
+   * @param {''|'PENDING'|'DONE'} [params.status] 处理状态
+   * @param {1|''} [params.mine] 传 1 时只看我创建或我作为关注人的交接
+   * @returns {Promise<{page:number,pageSize:number,total:number,list:Array}>}
+   *   list 项：{ id, content, orderId, creatorId, creatorName, createdAt,
+   *             watchers: [{ accountId, accountName, status:'PENDING'|'DONE', handledAt }],
+   *             myWatcherStatus: 'PENDING'|'DONE'|null }
    */
-  list: ({ startDate = '', endDate = '', status = '', relatedToMe = false, currentUser = '' } = {}) =>
-    mock(null, 200).then(() => {
-      let list = DB.slice();
-
-      if (startDate) list = list.filter((i) => i.createTime >= `${startDate} 00:00:00`);
-      if (endDate) list = list.filter((i) => i.createTime <= `${endDate} 23:59:59`);
-
-      if (relatedToMe && currentUser) {
-        list = list.filter(
-          (i) => i.watchAll || i.logs.some((l) => l.user === currentUser) || i.creator === currentUser
-        );
-      }
-
-      let decorated = list.map(decorate);
-      if (status === 0 || status === 1) {
-        decorated = decorated.filter((i) => i.status === Number(status));
-      }
-
-      // 最新提交在前
-      decorated.sort((a, b) => (a.createTime < b.createTime ? 1 : -1));
-      return { list: decorated };
-    }),
+  list: (params = {}) => request.get(`/api/admin/handovers${buildQuery(params)}`),
 
   /**
-   * 新增交接日志
-   * @param {Object} payload { content, orderNos, watchers, watchAll, currentUser }
+   * 关注人标记已处理 POST /api/admin/handovers/{id}/ack
+   * 当前用户由 token 识别，无需 body
+   * @param {number} id 交接 ID
+   * @returns {Promise<{ok:boolean}>}
    */
-  create: ({ content = '', orderNos = [], watchers = [], watchAll = false, currentUser = '' } = {}) =>
-    mock(null, 200).then(() => {
-      const users = watchAll ? STAFF_LIST.slice() : watchers.slice();
-      const item = {
-        id: ++seq,
-        content,
-        creator: currentUser || '未登录',
-        createTime: formatTime(),
-        orderNos: orderNos.slice(),
-        watchAll,
-        logs: users.map((u) => makeLogRow(u, false)),
-      };
-      DB.unshift(item);
-      return decorate(item);
-    }),
+  ack: (id) => request.post(`/api/admin/handovers/${id}/ack`),
 
   /**
-   * 标记当前人为「已处理」
+   * 新建交接日志 POST /api/admin/handovers
+   * @param {Object} data
+   * @param {string} data.content 交接内容（必填）
+   * @param {number} [data.orderId] 关联订单 ID
+   * @param {number[]} [data.watcherIds] 关注人 ID 列表
+   * @returns {Promise<Object>} 新建后的交接日志（字段同列表项）
    */
-  markProcessed: (id, currentUser = '') =>
-    mock(null, 200).then(() => {
-      const item = DB.find((x) => x.id === id);
-      if (!item) throw new Error('日志不存在');
-      const row = item.logs.find((l) => l.user === currentUser);
-      if (row) {
-        row.status = LOG_STATUS.DONE;
-        row.time = formatTime();
-      }
-      return decorate(item);
-    }),
+  create: (data = {}) => request.post('/api/admin/handovers', data),
 
   /**
-   * 处理日志明细
+   * 关注人候选 GET /api/admin/accounts
+   * 账号列表，默认只取正常状态（NORMAL）；统一标准化为 { accountId, accountName }
+   * @param {Object} [params] { keyword, role, status } status 默认 NORMAL
+   * @returns {Promise<Array<{accountId:number,accountName:string}>>}
    */
-  logs: (id) =>
-    mock(null, 150).then(() => {
-      const item = DB.find((x) => x.id === id);
-      if (!item) throw new Error('日志不存在');
-      return item.logs.map((l) => ({ ...l }));
-    }),
+  accounts: async (params = {}) => {
+    const res = await request.get(
+      `/api/admin/accounts${buildQuery({ status: 'NORMAL', ...params })}`
+    );
+    // 兼容后端返回数组或 { list: [...] } 两种结构
+    const list = Array.isArray(res) ? res : res?.list || [];
+    return list.map((a) => ({
+      accountId: a.accountId ?? a.id,
+      accountName: a.accountName || a.name || '',
+    }));
+  },
 };

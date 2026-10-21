@@ -17,8 +17,18 @@ export const AUDIT_OPTIONS = ['未提交', '待审核', '已驳回'];
 export const ATTR_OPTIONS = ['主订单', '子订单'];
 export const TYPE_OPTIONS = ['常规单', '特惠单'];
 export const CLIENT_OPTIONS = ['端游', '手游'];
-export const TAG_OPTIONS = ['呼叫', '卡单', '待发货', '已发货', '售后中', '冻结', '部分退款'];
-export const CALL_TYPE_OPTIONS = ['订单原因', '老板投诉', '打手问题', '技术问题', '其他'];
+export const TAG_OPTIONS = ['呼叫', '卡单', '待发货', '已发货', '售后中', '冻结', '部分退款', '转单', '已退款'];
+/**
+ * 呼叫类型（对齐后端枚举 ORDER/COMPLAINT/PLAYER/TECH/OTHER：
+ * 订单问题/投诉/打手问题/技术问题/其他；body 优先 type，提交英文枚举）
+ */
+export const CALL_TYPE_OPTIONS = [
+  { label: '订单问题', value: 'ORDER' },
+  { label: '投诉', value: 'COMPLAINT' },
+  { label: '打手问题', value: 'PLAYER' },
+  { label: '技术问题', value: 'TECH' },
+  { label: '其他', value: 'OTHER' },
+];
 export const GAME_OPTIONS = ['三角洲行动', '王者荣耀', '和平精英'];
 export const SPEC_OPTIONS = ['任务(8h)', '任务(9999h)', '护航', '跑刀'];
 export const CLUB_OPTIONS = ['张三俱乐部', '李四俱乐部', '王五俱乐部'];
@@ -66,7 +76,7 @@ const BASE = {
   rejectCount: 0,
   remark: '',
   /* ---- 编辑/详情扩展字段（原型：二维码上传、存单、完成凭证、分润、日志） ---- */
-  qrImg: '',               // 企鹅群二维码（base64，上传后回显）
+  qrImg: '',               // 企业群二维码（base64，上传后回显）
   depositTarget: '1000',   // 保底目标(W)
   depositReason: '',       // 存单原因（三角洲订单）
   depositFirst: '500',     // 第一把(W)
