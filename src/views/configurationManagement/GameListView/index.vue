@@ -6,8 +6,10 @@ import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
-import { gameApi } from '../../../api/modules/game';
+import { gameApi, HOLD_FORM_OPTIONS } from '../../../api/modules/game';
 import SkuMapping from './SkuMapping.vue';
+
+const holdFormOptions = HOLD_FORM_OPTIONS;
 
 const { confirm } = useConfirm();
 const { show } = useToast();
@@ -122,6 +124,7 @@ const editingId = ref(null); // null = 新增
 const editForm = reactive({
   name: '',
   settleDays: '',
+  holdForm: '',
   specs: [''],
 });
 
@@ -129,6 +132,7 @@ function openCreate() {
   editingId.value = null;
   editForm.name = '';
   editForm.settleDays = '';
+  editForm.holdForm = '';
   editForm.specs = [''];
   editVisible.value = true;
 }
@@ -137,6 +141,7 @@ async function openEdit(row) {
   editingId.value = row.id;
   editForm.name = row.name || '';
   editForm.settleDays = row.settleDays ?? '';
+  editForm.holdForm = row.holdForm || '';
   editForm.specs = [''];
   editVisible.value = true;
   try {
@@ -187,10 +192,21 @@ async function submitEdit() {
     show('请输入结算天数', 'warning');
     return;
   }
+  // 存单表单：三角洲新建未选时按后端约定默认 WARRANTY（保底把数）
+  let holdForm = editForm.holdForm;
+  if (!holdForm) {
+    if (!editingId.value && editForm.name.trim().includes('三角洲')) {
+      holdForm = 'WARRANTY';
+    } else {
+      show('请选择存单表单', 'warning');
+      return;
+    }
+  }
 
   const payload = {
     name: editForm.name.trim(),
     settleDays: Number(editForm.settleDays),
+    holdForm,
     specs,
   };
 
@@ -316,6 +332,16 @@ onMounted(fetchList);
               <span class="unit">天</span>
             </div>
           </div>
+        </div>
+
+        <div class="form-row">
+          <label class="required">存单表单</label>
+          <select v-model="editForm.holdForm" class="hold-form-select">
+            <option value="" disabled>请选择存单表单</option>
+            <option v-for="opt in holdFormOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
         </div>
 
         <div class="spec-section">
@@ -452,6 +478,7 @@ onMounted(fetchList);
 }
 
 .form-row input,
+.form-row select,
 .spec-row input {
   width: 100%;
   border: 1px solid #e3e7f0;
@@ -461,10 +488,12 @@ onMounted(fetchList);
   color: #1f2937;
   box-sizing: border-box;
   background: #fbfcfe;
+  font-family: inherit;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 
 .form-row input:focus,
+.form-row select:focus,
 .spec-row input:focus {
   border-color: #8b5cf6;
   outline: none;

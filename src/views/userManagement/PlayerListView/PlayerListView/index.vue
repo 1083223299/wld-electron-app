@@ -1169,7 +1169,7 @@ function pageChange(nextPage) {
 
 .modal-box:has(.player-modal-content) .modal-footer {
   padding: 16px 24px 20px;
-  background: linear-gradient(180deg, rgba(248, 250, 255, 0.7), rgba(243, 240, 255, 0.95));
+  /* background: linear-gradient(180deg, rgba(248, 250, 255, 0.7), rgba(243, 240, 255, 0.95)); */
   border-top: 1px solid var(--primary-faint);
 }
 </style>

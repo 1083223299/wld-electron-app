@@ -115,7 +115,7 @@ onMounted(fetchConfig);
             />
             <span class="unit">分钟</span>
           </div>
-          <span class="field-tip">{{ f.tip }}</span>
+          <!-- <span class="field-tip">{{ f.tip }}</span> -->
         </div>
 
         <!-- 暂未开放项（灰显，不可编辑） -->
@@ -126,7 +126,7 @@ onMounted(fetchConfig);
             <span class="unit">分钟</span>
             <span class="lock-badge">未开放</span>
           </div>
-          <span class="field-tip">{{ f.tip }}</span>
+          <!-- <span class="field-tip">{{ f.tip }}</span> -->
         </div>
 
         <div class="footer">

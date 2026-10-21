@@ -60,14 +60,23 @@ async function http({ url, method = 'GET', data, headers = {} }) {
       ? requestConfig.url
       : `${BASE_URL}${requestConfig.url}`;
 
-    // 发起请求：data 序列化为 JSON 字符串，无 data 则不传 body
+    // FormData（文件上传）：不手动设置 Content-Type，交给浏览器携带 boundary
+    const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
+
+    // 发起请求：普通对象序列化为 JSON 字符串，FormData 原样传递，无 data 则不传 body
     const res = await fetch(targetUrl, {
       method: requestConfig.method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...requestConfig.headers,
-      },
-      body: data !== undefined && data !== null ? JSON.stringify(data) : undefined,
+      headers: isFormData
+        ? { Accept: 'application/json', ...requestConfig.headers }
+        : {
+            'Content-Type': 'application/json',
+            ...requestConfig.headers,
+          },
+      body: isFormData
+        ? data
+        : data !== undefined && data !== null
+          ? JSON.stringify(data)
+          : undefined,
       signal: controller.signal,
     });
 
@@ -77,7 +86,18 @@ async function http({ url, method = 'GET', data, headers = {} }) {
     if (contentType.includes('application/json')) {
       payload = await res.json();
     } else {
-      payload = await res.text();
+      const text = await res.text();
+      // 兼容：部分网关/代理会改写 Content-Type 为非 JSON，但响应体实为 JSON
+      const trimmed = text.trim();
+      if (trimmed && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+        try {
+          payload = JSON.parse(trimmed);
+        } catch (e) {
+          payload = text;
+        }
+      } else {
+        payload = text;
+      }
     }
 
     // 401：仅当请求携带了 Authorization（登录后会话失效）才清除 token 并跳转登录页；
@@ -97,9 +117,12 @@ async function http({ url, method = 'GET', data, headers = {} }) {
       throw new Error(errorMessage);
     }
 
-    // 业务码校验：code 不为 0/200 视为业务失败（兼容两种成功码约定）
-    if (payload && typeof payload === 'object' && 'code' in payload && payload.code !== 0 && payload.code !== 200) {
-      throw new Error(payload.message || '业务处理失败');
+    // 业务码校验：code 不为 0/200 视为业务失败（兼容两种成功码约定；数字字符串如 "0"/"200" 一并兼容）
+    if (payload && typeof payload === 'object' && 'code' in payload) {
+      const bizCode = Number(payload.code);
+      if (bizCode !== 0 && bizCode !== 200) {
+        throw new Error(payload.message || '业务处理失败');
+      }
     }
 
     // 提取 data 字段（无 data 包裹则直接返回 payload），再依次执行响应拦截器
@@ -142,4 +165,6 @@ export const request = {
   post: (url, data, headers) => http({ url, method: 'POST', data, headers }),
   put: (url, data, headers) => http({ url, method: 'PUT', data, headers }),
   del: (url, headers) => http({ url, method: 'DELETE', headers }),
+  /** 文件上传：data 为 FormData，自动走 multipart（POST） */
+  upload: (url, formData, headers) => http({ url, method: 'POST', data: formData, headers }),
 };

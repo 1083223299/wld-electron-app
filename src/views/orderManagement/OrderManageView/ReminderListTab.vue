@@ -1,57 +1,24 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
-import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useListMemory } from '../../../composables/useListMemory';
 import { orderApi, channelText } from '../../../api/modules/order';
 
 /**
  * 催单列表（接口联调）：GET /api/admin/orders/urge-hall
  * 未支付第三方订单（status=WAIT_PAY），支付或取消后离开本列表
- * 服务端分页/筛选（orderNo/thirdOrderNo 完全匹配，from/to 时间范围）
+ * 需求无搜索模块：仅服务端分页，不传筛选参数（筛选接口由后端补充后再加）
  * 鉴权：Authorization Bearer {token} 由 request.js 自动附加
  */
-const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['orderNo', 'thirdOrderNo', 'createTime'],
-});
-
-const filter = reactive({
-  orderNo: '',
-  thirdOrderNo: '',
-  createTime: [],
-});
-restoreFilter(filter);
-
-const searchFields = [
-  { prop: 'orderNo', label: '本平台订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 8 },
-  { prop: 'thirdOrderNo', label: '第三方订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 8 },
-  {
-    prop: 'createTime',
-    label: '创建时间',
-    type: 'daterange',
-    startPlaceholder: '开始时间',
-    endPlaceholder: '结束时间',
-    span: 8,
-  },
-];
+const { page, pageSize, onPageSizeChange, onPageChange } = useListMemory();
 
 const rows = ref([]);
 const total = ref(0);
-const loading = ref(false);
-
-const fmtDay = (d) => {
-  if (!d) return '';
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-};
 
 /** 后端字段 → 页面展示字段 */
 function mapRow(item = {}) {
   return {
     id: item.id,
-    orderNo: item.orderNo || '',
     thirdOrderNo: item.thirdOrderNo || '',
     channel: channelText(item.channelCode),
     channelCode: item.channelCode,
@@ -63,39 +30,14 @@ function mapRow(item = {}) {
 }
 
 async function fetchList() {
-  loading.value = true;
   try {
-    const [fromDay, toDay] = Array.isArray(filter.createTime) ? filter.createTime : [];
-    const res = await orderApi.urgeHall({
-      page: page.value,
-      pageSize: pageSize.value,
-      orderNo: String(filter.orderNo || '').trim(),
-      thirdOrderNo: String(filter.thirdOrderNo || '').trim(),
-      from: fmtDay(fromDay),
-      to: fmtDay(toDay),
-    });
+    const res = await orderApi.urgeHall({ page: page.value, pageSize: pageSize.value });
     rows.value = ((res && res.list) || []).map(mapRow);
     total.value = (res && res.total) || 0;
   } catch {
     rows.value = [];
     total.value = 0;
-  } finally {
-    loading.value = false;
   }
-}
-
-function handleSearch(values) {
-  Object.assign(filter, values);
-  rememberFilter(filter, true);
-  fetchList();
-}
-
-function handleReset() {
-  Object.keys(filter).forEach((key) => {
-    filter[key] = Array.isArray(filter[key]) ? [] : '';
-  });
-  rememberFilter(filter, true);
-  fetchList();
 }
 
 onMounted(fetchList);
@@ -111,17 +53,6 @@ const columns = [
 
 <template>
   <div class="reminder-tab list-page">
-    <div class="list-page__search">
-      <SearchComponent
-        :fields="searchFields"
-        :initial-values="filter"
-        :row-columns="3"
-        :labelWidth="'97px'"
-        @search="handleSearch"
-        @reset="handleReset"
-      />
-    </div>
-
     <DataTable
       class="list-panel"
       :columns="columns"
@@ -150,10 +81,6 @@ const columns = [
 </template>
 
 <style scoped>
-.reminder-tab {
-  gap: 12px;
-}
-
 .channel-tag {
   display: inline-flex;
   align-items: center;

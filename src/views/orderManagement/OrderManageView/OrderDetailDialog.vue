@@ -120,8 +120,8 @@ async function copyText(text) {
       </div>
       <div class="kv-line">
         <span>企微群二维码</span>
-        <img v-if="row.qrImg" :src="row.qrImg" class="qr-img" alt="企微群二维码" />
-        <strong v-else class="muted-text">暂无上传（字段接口待后端补充）</strong>
+        <img v-if="row.groupQrUrl" :src="row.groupQrUrl" class="qr-img" alt="企微群二维码" />
+        <strong v-else class="muted-text">暂无上传</strong>
       </div>
     </section>
 

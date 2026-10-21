@@ -39,7 +39,7 @@ export const environments = {
   [ENV_NAMES.DEV]: {
     name: '开发',
     apibaseURL: 'https://api.weilaidong.com/devapi',
-    uplobaseURL: 'https://api.weilaidong.com/devapi/common/file/upload',
+    uplobaseURL: 'https://api.weilaidong.com/devapi/api/admin/files/upload',
     websocketURL: 'wss://dev-ws.myapp.com',
     timeout: 8000,
     useMock: false,

@@ -149,10 +149,10 @@ export const orderApi = {
   audit: (id, data = {}) => request.post(`/api/admin/orders/${id}/audit`, data),
 
   /** 冻结订单 POST /api/admin/orders/{id}/freeze */
-  freeze: (id, data = {}) => request.post(`/api/admin/orders/{id}/freeze`, data),
+  freeze: (id, data = {}) => request.post(`/api/admin/orders/${id}/freeze`, data),
 
   /** 解冻订单 POST /api/admin/orders/{id}/unfreeze */
-  unfreeze: (id) => request.post(`/api/admin/orders/{id}/unfreeze`),
+  unfreeze: (id) => request.post(`/api/admin/orders/${id}/unfreeze`),
 
   /** 平台加减价 POST /api/admin/orders/{id}/platform-adjust（direction: INCREASE/DECREASE） */
   platformAdjust: (id, data = {}) => request.post(`/api/admin/orders/${id}/platform-adjust`, data),

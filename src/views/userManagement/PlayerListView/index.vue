@@ -8,18 +8,28 @@ import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
 import { playerApi } from '../../../api/modules/player';
 import { gameApi } from '../../../api/modules/game';
+import { fileApi } from '../../../api/modules/file';
+import { useUserStore } from '../../../stores/user';
 
 const { confirm } = useConfirm();
 const { show } = useToast();
 
+/** 当前角色：客服（service）仅有查看权限，隐藏全部操作按钮 */
+const userStore = useUserStore();
+const isService = computed(() => (userStore.role || '') === 'service');
+
 const filter = reactive({
-  keyword: '',
+  id: '',
+  name: '',
+  phone: '',
   clubId: '',
-  status: '',
+  clubName: '',
+  accountStatus: '',
+  createdTime: [],
 });
 
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['keyword', 'clubId', 'status'],
+  filterKeys: ['id', 'name', 'phone', 'clubId', 'clubName', 'accountStatus', 'createdTime'],
 });
 restoreFilter(filter);
 const editDialogVisible = ref(false);
@@ -31,6 +41,7 @@ const specDialogVisible = ref(false);
 const specLoading = ref(false);
 const specSaving = ref(false);
 const specLoadError = ref(false);
+const specCatalogError = ref(false); // 游戏/规格目录加载失败（与规格接口失败分开提示）
 // 游戏-规格目录：来源 gameApi.all()（当前为 mock），真实联调时规格 id 以游戏/规格列表接口返回为准
 const specCatalog = ref([]); // [{ gameId, gameName, specs: [{ id, name }] }]
 const specGameRows = ref([]); // [{ gameId, gameName, specs, all, checked:Set<number> }]
@@ -43,7 +54,10 @@ const editForm = reactive({
   phone: '',
   status: '可接单',
   remark: '',
+  files: [], // 附件 url 列表（PUT /api/admin/players/{id} files；最多5个）
 });
+
+const editUploading = ref(false);
 
 const assetForm = reactive({
   assetType: '收益',
@@ -91,7 +105,7 @@ const loading = ref(false);
 
 const statusOptions = ['可接单', '禁止接单', '未冻结', '冻结', '在店', '退店'];
 
-const columns = [
+const allColumns = [
   { key: 'id', title: '打手ID' },
   { key: 'name', title: '打手名称' },
   { key: 'clubName', title: '俱乐部名称' },
@@ -104,52 +118,86 @@ const columns = [
   { key: 'op', title: '操作' },
 ];
 
+/** 客服仅查看：隐藏"操作"列（编辑/资产管理/规格/接单/冻结/退店等按钮均不可见） */
+const columns = computed(() =>
+  isService.value ? allColumns.filter((col) => col.key !== 'op') : allColumns
+);
+
 const searchFields = [
-  { prop: 'keyword', label: '关键词', type: 'input', placeholder: '名称或手机号', span: 6 },
+  { prop: 'id', label: '打手ID', type: 'input', placeholder: '请输入打手ID', span: 5 },
+  { prop: 'name', label: '打手名称', type: 'input', placeholder: '请输入打手名称', span: 5 },
+  { prop: 'phone', label: '打手手机号', type: 'input', placeholder: '请输入手机号', span: 5 },
   { prop: 'clubId', label: '俱乐部ID', type: 'input', placeholder: '请输入俱乐部ID', span: 5 },
+  { prop: 'clubName', label: '俱乐部名称', type: 'input', placeholder: '请输入俱乐部名称', span: 5 },
   {
-    prop: 'status',
+    prop: 'accountStatus',
     label: '状态',
     type: 'select',
     placeholder: '全部',
-    span: 5,
-    options: [
-      { label: '全部', value: '' },
-      { label: '正常', value: 'NORMAL' },
-      { label: '禁止接单', value: 'DISABLED' },
+    span: 4,
+    options: [{ label: '全部', value: '' }, ...statusOptions.map((item) => ({ label: item, value: item }))],
+  },
+  {
+    prop: 'createdTime',
+    label: '创建时间',
+    type: 'daterange',
+    startPlaceholder: '开始时间',
+    endPlaceholder: '结束时间',
+    shortcuts: [
+      { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+      { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+      { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
     ],
   },
 ];
 
 // ============ 列表数据（服务端分页/筛选） ============
-/** 后端列表字段 → 页面展示字段；钱包/订单统计字段当前接口未返回，待对应接口接入后填充 */
+/** 后端字段 → 页面状态展示：退店 > 冻结 > 禁止接单 > 可接单（主状态，编辑弹窗等单值场景用） */
+function deriveStatus(row) {
+  if (!row.isInStore || row.quitAt) return '退店';
+  if (row.isFrozen) return '冻结';
+  if (!row.canTake || row.statusDisabled) return '禁止接单';
+  return '可接单';
+}
+
+/** 多维状态 → 中文标签列表：接单/冻结/在店 三个维度各出一个标签，如 ['可接单','未冻结','在店'] */
+function deriveStatusList(row) {
+  const list = [];
+  list.push(row.canTake && !row.statusDisabled ? '可接单' : '禁止接单');
+  list.push(row.isFrozen ? '冻结' : '未冻结');
+  list.push(!row.isInStore || row.quitAt ? '退店' : '在店');
+  return list;
+}
+
+/** 后端列表/详情字段 → 页面行对象（余额/订单统计/钱包冻结均为接口真实字段）
+ *  注意：状态三字段按后端实际语义解析（与接口文档 0/1 相反）：
+ *  inStore 0=在店 / 1=退店；canTake 0=可接单 / 1=禁止接单；walletFrozen 0=未冻结 / 1=冻结 */
 function mapPlayerRow(item = {}) {
-  const statusRaw = String(item.status || '').toUpperCase();
-  const inStore = Number(item.inStore) === 1;
-  const canTake = Number(item.canTake) === 1;
-
-  let status = '可接单';
-  if (item.quitAt) status = '退店';
-  else if (statusRaw === 'DISABLED' || !canTake) status = '禁止接单';
-
-  return {
+  const row = {
     id: item.id,
     clubId: item.clubId,
     clubName: item.clubName || '',
     name: item.name || '',
     phone: item.phone || '',
-    status,
-    isFrozen: false, // 列表接口暂无冻结字段，钱包冻结/解冻接口接入后填充
-    isInStore: inStore,
-    canTake,
-    remark: '',
+    isInStore: Number(item.inStore) === 0,
+    canTake: Number(item.canTake) === 0,
+    isFrozen: Number(item.walletFrozen) === 0,
+    statusDisabled: String(item.status || '').toUpperCase() === 'DISABLED',
+    realNameVerified: Number(item.realNameVerified) === 1,
+    remark: item.remark || '',
+    files: Array.isArray(item.files) ? item.files : [],
     quitAt: item.quitAt || '',
-    income: item.income ?? '—',
-    deposit: item.deposit ?? '—',
-    finished: item.finished ?? '—',
-    failed: item.failed ?? '—',
-    freezeCount: item.freezeCount ?? '—',
+    createdAt: item.createdAt || '',
+    specs: Array.isArray(item.specs) ? item.specs : [],
+    income: item.incomeBalance,
+    deposit: item.depositBalance,
+    finished: item.completedCount,
+    failed: item.rejectedCount,
+    freezeCount: item.frozenCount,
   };
+  row.status = deriveStatus(row);
+  row.statusList = deriveStatusList(row);
+  return row;
 }
 
 function fmtMoney(value) {
@@ -158,17 +206,29 @@ function fmtMoney(value) {
   return Number.isFinite(n) ? n.toFixed(2) : '—';
 }
 
+function formatDay(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 async function fetchList() {
   loading.value = true;
   try {
+    const [start, end] = filter.createdTime || [];
     const res = await playerApi.list({
       page: page.value,
       pageSize: pageSize.value,
-      keyword: filter.keyword,
+      id: filter.id,
+      name: filter.name,
+      phone: filter.phone,
       clubId: filter.clubId,
-      status: filter.status,
+      clubName: filter.clubName,
+      accountStatus: filter.accountStatus,
+      createdFrom: formatDay(start),
+      createdTo: formatDay(end),
     });
-    rows.value = (res && res.list) || [];
+    rows.value = ((res && res.list) || []).map(mapPlayerRow);
     total.value = (res && res.total) || 0;
   } catch (e) {
     // 错误提示由 request.js 统一弹出
@@ -181,7 +241,7 @@ async function fetchList() {
 
 onMounted(fetchList);
 
-function openEdit(row) {
+async function openEdit(row) {
   currentRow.value = row;
   Object.assign(editForm, {
     name: row.name,
@@ -189,22 +249,108 @@ function openEdit(row) {
     phone: row.phone || '',
     status: row.status,
     remark: row.remark || '',
+    files: (row.files || []).map((url) => ({ url, name: urlFileName(url) })),
   });
   editDialogVisible.value = true;
+  // 详情回显：GET /players/{id}，含备注/文件/规格等完整字段；失败沿用行数据（错误已统一提示）
+  try {
+    const data = await playerApi.detail(row.id);
+    const detail = data && Array.isArray(data.list) ? data.list[0] : data;
+    if (!detail) return;
+    const mapped = mapPlayerRow(detail);
+    Object.assign(editForm, {
+      name: mapped.name,
+      clubName: mapped.clubName,
+      phone: mapped.phone,
+      status: mapped.status,
+      remark: mapped.remark,
+      files: (mapped.files || []).map((url) => ({ url, name: urlFileName(url) })),
+    });
+  } catch (e) {
+    /* 回显失败沿用行数据 */
+  }
+}
+
+/* ===== 编辑弹窗附件：fileApi.upload 上传拿 url，files 存 { url, name } 数组（最多5个） =====
+   name 用后端返回的真实文件名（fileName），保证图片/格式类型判断准确；历史数据从 url 提取 */
+const urlFileName = (url = '') => {
+  const path = String(url).split('?')[0];
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(name) || String(url);
+  } catch {
+    return name || String(url);
+  }
+};
+
+const editFiles = computed(() =>
+  (editForm.files || []).map((item, index) => {
+    const name = (item && item.name) || urlFileName(item && item.url) || '';
+    const meta = getFileMeta({ name });
+    const ext = getFileExt(name);
+    const image = IMAGE_EXTS.includes(ext);
+    return {
+      index,
+      url: item && item.url,
+      name,
+      icon: meta.icon,
+      bg: `${meta.color}1f`,
+      isImage: image,
+      // 占位名（空名 / 后端 content 这类）不展示名称，只显示缩略图或图标
+      showName: !!name && name !== 'content' && getFileExt(name) !== '',
+      // 无扩展名（如后端 OSS 地址文件名 content）：先按图片渲染，onerror 再回退图标
+      unknown: ext === '' && !!(item && item.url),
+    };
+  })
+);
+
+function openEditFilePicker() {
+  document.getElementById('edit-upload-input')?.click();
+}
+
+async function handleEditFiles(event) {
+  const picked = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (!picked.length) return;
+  const room = maxUploadFiles - editForm.files.length;
+  if (room <= 0) return show(`最多上传 ${maxUploadFiles} 个文件`, 'warning');
+  editUploading.value = true;
+  try {
+    for (const file of picked.slice(0, room)) {
+      const res = await fileApi.upload(file);
+      // 保留后端返回的真实文件名，避免 OSS url 无扩展名时类型判断失败（如图片显示成图标）
+      editForm.files.push({ url: res.url, name: res.fileName || file.name });
+    }
+    show('文件已上传', 'success');
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  } finally {
+    editUploading.value = false;
+  }
+}
+
+function removeEditFile(index) {
+  editForm.files.splice(index, 1);
 }
 
 async function loadSpecCatalog() {
   if (specCatalog.value.length) return;
-  const games = await gameApi.all();
-  specCatalog.value = (games || []).map((game) => ({
-    gameId: game.id,
-    gameName: game.name,
-    specs: (game.specs || []).map((name, i) => ({ id: i + 1, name })),
-  }));
+  try {
+    const games = await gameApi.all();
+    specCatalog.value = (Array.isArray(games) ? games : []).map((game) => ({
+      gameId: game.id,
+      gameName: game.name,
+      specs: (Array.isArray(game.specs) ? game.specs : []).map((name, i) => ({ id: i + 1, name })),
+    }));
+  } catch (e) {
+    // 游戏/规格目录加载失败：与规格接口失败分开提示（错误信息已由 request.js 弹出）
+    specCatalogError.value = true;
+  }
 }
 
 function buildSpecRows(list) {
-  const configMap = new Map((list || []).map((item) => [Number(item.gameId), item]));
+  const listArr = Array.isArray(list) ? list : [];
+  const configMap = new Map(listArr.map((item) => [Number(item.gameId), item]));
   specGameRows.value = specCatalog.value.map((game) => {
     const cfg = configMap.get(game.gameId);
     const all = !!(cfg && cfg.all);
@@ -217,10 +363,12 @@ async function openSpecs(row) {
   currentRow.value = row;
   specGameRows.value = [];
   specLoadError.value = false;
+  specCatalogError.value = false;
   specDialogVisible.value = true;
   specLoading.value = true;
   try {
     await loadSpecCatalog();
+    if (specCatalogError.value) return; // 目录加载失败，展示对应提示
     const list = await playerApi.getSpecs(Number(row.id));
     buildSpecRows(list);
   } catch (e) {
@@ -422,9 +570,9 @@ function getStatusClass(status) {
 function canShowAction(row, action) {
   switch (action) {
     case '禁止接单':
-      return row.status === '可接单';
+      return row.canTake && row.isInStore;
     case '开启接单':
-      return row.status === '禁止接单';
+      return !row.canTake && row.isInStore;
     case '钱包冻结':
       return !row.isFrozen && row.isInStore;
     case '钱包解冻':
@@ -446,40 +594,65 @@ async function triggerAction(action, row) {
   });
   if (!ok) return;
 
-  if (action === '禁止接单') row.status = '禁止接单';
-  if (action === '开启接单') row.status = '可接单';
-  if (action === '钱包冻结') {
-    row.isFrozen = true;
-    row.status = '冻结';
-  }
-  if (action === '钱包解冻') {
-    row.isFrozen = false;
-    row.status = '未冻结';
-  }
-  if (action === '退店') {
-    row.isInStore = false;
-    row.status = '退店';
-  }
-  if (action === '恢复在店') {
-    row.isInStore = true;
-    row.status = '在店';
-  }
+  // PUT /players/{id}/flags：只传要改的字段；退店同时禁止接单
+  // 按后端实际行为：1=退店/禁止接单/钱包冻结，0=恢复在店/开启接单/钱包解冻（与接口文档 0/1 相反）
+  const flags = {
+    禁止接单: { canTake: 1 },
+    开启接单: { canTake: 0 },
+    钱包冻结: { walletFrozen: 0 },
+    钱包解冻: { walletFrozen: 1 },
+    退店: { inStore: 1 },
+    恢复在店: { inStore: 0 },
+  }[action];
 
-  show(`${action}成功`, 'success');
+  try {
+    const res = await playerApi.updateFlags(row.id, flags);
+    if (res && res.ok === false) {
+      show(`${action}失败：操作未通过校验`, 'error');
+      return;
+    }
+    // 本地同步（入参语义：1=退店/禁止/冻结，0=在店/开启/解冻）
+    if (flags.canTake !== undefined) row.canTake = flags.canTake === 0;
+    if (flags.inStore !== undefined) row.isInStore = flags.inStore === 0;
+    if (flags.walletFrozen !== undefined) row.isFrozen = flags.walletFrozen === 0;
+    if (flags.inStore === 1) row.canTake = false; // 退店同时禁止接单
+    row.status = deriveStatus(row);
+    row.statusList = deriveStatusList(row);
+    show(`${action}成功`, 'success');
+    fetchList(); // 以服务端为准刷新列表（本地已同步，刷新兜底一致）
+  } catch (e) {
+    // 错误提示由 request.js 统一弹出
+  }
 }
 
-function submitEdit() {
+async function submitEdit() {
   if (!currentRow.value) return;
-  currentRow.value.name = editForm.name;
-  currentRow.value.clubName = editForm.clubName;
-  currentRow.value.phone = editForm.phone;
-  currentRow.value.status = editForm.status;
-  currentRow.value.remark = editForm.remark;
-  editDialogVisible.value = false;
-  show('编辑成功', 'success');
+  const remark = String(editForm.remark || '');
+  if (remark.length > 200) return show('备注不能超过200字', 'warning');
+  try {
+    // PUT /api/admin/players/{id}：password 不传不改密码；remark 传空串清除；files 传空数组清除附件
+    await playerApi.update(currentRow.value.id, {
+      name: String(editForm.name || '').trim(),
+      phone: String(editForm.phone || '').trim(),
+      remark,
+      files: editForm.files.map((f) => f.url),
+    });
+    // 本地同步展示字段（状态/俱乐部名称不在本接口范围，保持本地编辑效果）
+    currentRow.value.name = editForm.name;
+    currentRow.value.clubName = editForm.clubName;
+    currentRow.value.phone = editForm.phone;
+    currentRow.value.status = editForm.status;
+    currentRow.value.remark = editForm.remark;
+    currentRow.value.files = editForm.files.map((f) => f.url);
+    editDialogVisible.value = false;
+    show('编辑成功', 'success');
+    fetchList(); // 以服务端为准刷新列表
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
-function submitAsset() {
+async function submitAsset() {
   if (!currentRow.value) return;
 
   if (assetForm.assetType === '押金' && assetForm.operation === '余额抵扣') {
@@ -488,8 +661,8 @@ function submitAsset() {
   }
 
   const amount = normalizeAssetAmount(assetForm.amount);
-  if (amount === '' || amount === 0) {
-    show('请输入有效金额', 'warning');
+  if (amount === '' || !(amount > 0)) {
+    show('请输入有效金额（正数）', 'warning');
     return;
   }
 
@@ -498,25 +671,31 @@ function submitAsset() {
     return;
   }
 
-  const key = currentAssetKey.value;
-  const currentValue = Number(currentRow.value[key] ?? 0);
-
-  if (assetForm.operation === '充值') {
-    currentRow.value[key] = Number((currentValue + amount).toFixed(2));
+  // POST /players/{id}/wallet-adjust：walletType 收益/押金，action CREDIT/DEDUCT/OFFSET，金额为正数
+  const ACTION_MAP = { 充值: 'CREDIT', 扣减: 'DEDUCT', 余额抵扣: 'OFFSET' };
+  try {
+    const res = await playerApi.walletAdjust(currentRow.value.id, {
+      walletType: assetForm.assetType === '押金' ? 'DEPOSIT' : 'INCOME',
+      action: ACTION_MAP[assetForm.operation],
+      amount,
+      reason: assetForm.reason.trim(),
+    });
+    // 用服务端返回的余额回写（data: { ok, bizId, income, deposit, walletFrozen }）
+    if (res) {
+      if (res.income !== undefined) currentRow.value.income = Number(res.income);
+      if (res.deposit !== undefined) currentRow.value.deposit = Number(res.deposit);
+      if (res.walletFrozen !== undefined) {
+        currentRow.value.isFrozen = Boolean(res.walletFrozen);
+        currentRow.value.status = deriveStatus(currentRow.value);
+        currentRow.value.statusList = deriveStatusList(currentRow.value);
+      }
+    }
+    assetDialogVisible.value = false;
+    show('资产已更新', 'success');
+    fetchList(); // 以服务端为准刷新列表
+  } catch (e) {
+    // 错误提示由 request.js 统一弹出
   }
-
-  if (assetForm.operation === '扣减') {
-    currentRow.value[key] = Number((currentValue - amount).toFixed(2));
-  }
-
-  if (assetForm.operation === '余额抵扣') {
-    const otherKey = key === 'income' ? 'deposit' : 'income';
-    currentRow.value[key] = Number((currentValue - amount).toFixed(2));
-    currentRow.value[otherKey] = Number((Number(currentRow.value[otherKey] ?? 0) + amount).toFixed(2));
-  }
-
-  assetDialogVisible.value = false;
-  show('资产已更新', 'success');
 }
 
 function pageChange(nextPage) {
@@ -554,7 +733,13 @@ function pageSizeChange(size) {
       <template #cell-deposit="{ row }">{{ fmtMoney(row.deposit) }}</template>
 
       <template #cell-status="{ row }">
-        <span :class="['status-badge', getStatusClass(row.status)]">{{ row.status }}</span>
+        <div class="status-badges">
+          <span
+            v-for="st in row.statusList"
+            :key="st"
+            :class="['status-badge', getStatusClass(st)]"
+          >{{ st }}</span>
+        </div>
       </template>
 
       <template #cell-op="{ row }">
@@ -585,7 +770,7 @@ function pageSizeChange(size) {
       </template>
     </DataTable>
 
-    <AppModal v-model="editDialogVisible" title="编辑打手" width="480px">
+    <AppModal v-model="editDialogVisible" title="编辑打手" width="560px">
       <div class="dialog-form player-modal-content">
         <div class="form-row">
           <label>打手名称</label>
@@ -607,7 +792,38 @@ function pageSizeChange(size) {
         </div>
         <div class="form-row">
           <label>备注</label>
-          <textarea v-model="editForm.remark" rows="3" placeholder="请输入备注"></textarea>
+          <textarea v-model="editForm.remark" rows="3" maxlength="200" placeholder="请输入备注，最多200字"></textarea>
+        </div>
+        <div class="form-row edit-files-row">
+          <label>附件</label>
+          <div class="upload-box">
+            <input id="edit-upload-input" type="file" multiple hidden :disabled="editUploading" @change="handleEditFiles" />
+            <div class="upload-toolbar">
+              <button type="button" class="upload-trigger" :disabled="editUploading" @click="openEditFilePicker">
+                {{ editUploading ? '上传中…' : '上传文件' }}
+              </button>
+              <span class="upload-tip">支持任意格式文件，最多上传 {{ maxUploadFiles }} 个</span>
+            </div>
+            <div v-if="editFiles.length" class="file-list">
+              <div v-for="item in editFiles" :key="`${item.name}-${item.index}`" class="file-item">
+                <template v-if="item.isImage || item.unknown">
+                  <img
+                    class="file-thumb"
+                    :src="item.url"
+                    :alt="item.name"
+                    v-show="!item.imgError"
+                    @error="item.imgError = true"
+                  />
+                  <span v-show="item.imgError" class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
+                </template>
+                <span v-else class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
+                <div class="file-info">
+                  <a v-if="item.showName" class="file-name" :href="item.url" target="_blank" :title="item.name">{{ item.name }}</a>
+                </div>
+                <button type="button" class="file-remove" @click="removeEditFile(item.index)">×</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <template #footer>
@@ -711,7 +927,11 @@ function pageSizeChange(size) {
         <div v-if="specLoading" class="spec-loading">规格加载中…</div>
         <template v-else>
           <div v-if="specLoadError" class="spec-empty">规格加载失败，请检查接口或稍后重试</div>
-          <div v-else-if="!specGameRows.length" class="spec-empty">暂无游戏规格数据，请先在游戏管理中配置</div>
+          <div v-else-if="specCatalogError" class="spec-empty">
+            游戏/规格目录加载失败，请检查接口或稍后重试
+            <button type="button" class="spec-retry" @click="openSpecs(currentRow)">重试</button>
+          </div>
+          <div v-else-if="!specGameRows.length" class="spec-empty">暂无游戏规格数据，请先在游戏管理中配置游戏与规格</div>
           <div v-else class="spec-game-list">
             <div v-for="game in specGameRows" :key="game.gameId" class="spec-game-item">
               <div class="spec-game-head">
@@ -840,6 +1060,13 @@ function pageSizeChange(size) {
   line-height: 1.4;
 }
 
+.status-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .list-page__body td:last-child {
   min-width: 420px;
 }
@@ -883,6 +1110,19 @@ function pageSizeChange(size) {
 
 .form-row:has(textarea) {
   grid-column: 1 / -1;
+}
+
+.form-row.edit-files-row {
+  grid-column: 1 / -1;
+}
+
+.edit-files-row .file-name {
+  text-decoration: none;
+}
+
+.edit-files-row .upload-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .form-row label {
@@ -1298,6 +1538,22 @@ function pageSizeChange(size) {
   font-size: 13px;
 }
 
+.spec-retry {
+  margin-left: 8px;
+  border: 1px solid var(--primary-border-strong);
+  border-radius: 8px;
+  padding: 4px 14px;
+  background: var(--bg-card);
+  color: var(--primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.spec-retry:hover {
+  background: var(--primary-soft);
+}
+
 .spec-game-list {
   display: grid;
   gap: 12px;
@@ -1466,7 +1722,7 @@ function pageSizeChange(size) {
 
 .modal-box:has(.player-modal-content) .modal-footer {
   padding: 16px 24px 20px;
-  background: linear-gradient(180deg, rgba(248, 250, 255, 0.7), rgba(243, 240, 255, 0.95));
+  /* background: linear-gradient(180deg, rgba(248, 250, 255, 0.7), rgba(243, 240, 255, 0.95)); */
   border-top: 1px solid var(--primary-faint);
 }
 </style>

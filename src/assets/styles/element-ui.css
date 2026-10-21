@@ -412,7 +412,9 @@
 .el-input-number .el-input__inner::placeholder {
   color: var(--input-placeholder) !important;
 }
-
+.el-select__placeholder.is-transparent {
+  color: var(--input-one-placeholder) !important;;
+}
 .el-input__wrapper.is-focus .el-input__suffix-inner .el-icon,
 .el-select__wrapper.is-focused .el-select__caret {
   color: var(--primary-hover);

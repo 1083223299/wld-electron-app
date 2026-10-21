@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { fuzzyMatch, highlightHtml } from '../../utils/fuzzyMatch';
+import { useUserStore } from '../../stores/user';
 
 const props = defineProps({
   collapsed: {
@@ -12,6 +13,10 @@ const props = defineProps({
 
 const route = useRoute();
 const router = useRouter();
+const userStore = useUserStore();
+
+/** 当前登录角色（admin=管理员 / service=客服 / audit=审核员 / finance=财务） */
+const userRole = computed(() => userStore.role || 'admin');
 
 const openedKeys = ref(new Set());
 const hoveredKey = ref('');
@@ -58,6 +63,9 @@ const groupActive = (menu) =>
 
 const isVisible = (record) => {
   if (record.meta?.hidden || record.hidden) return false;
+  // 角色过滤：meta.roles 配置了可见角色时，当前角色不在其中则不显示
+  const roles = record.meta?.roles;
+  if (Array.isArray(roles) && !roles.includes(userRole.value)) return false;
   const children = record.children || [];
   if (children.length && !children.some(isVisible)) return false;
   return true;

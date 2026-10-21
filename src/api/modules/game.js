@@ -3,8 +3,8 @@ import { request } from '../request';
 // =====================================================================
 // 游戏管理 / 规格管理：已按 OpenAPI 联调真实后端（鉴权走 request.js 自动附加 Bearer token）
 //   GET    /api/admin/games                  游戏列表（全量返回，无分页参数，分页/筛选由页面本地完成）
-//   POST   /api/admin/games                  新增游戏   body: { name, settleDays }
-//   PUT    /api/admin/games/{id}             编辑游戏   body: { name, settleDays }
+//   POST   /api/admin/games                  新增游戏   body: { name, settleDays, holdForm }
+//   PUT    /api/admin/games/{id}             编辑游戏   body: { name, settleDays, holdForm }
 //   DELETE /api/admin/games/{id}             删除游戏（软删）
 //   GET    /api/admin/games/{gameId}/specs   规格列表
 //   POST   /api/admin/games/{gameId}/specs   新增规格   body: { name }
@@ -12,35 +12,61 @@ import { request } from '../request';
 //   DELETE /api/admin/games/{gameId}/specs/{id}  删除规格（软删）
 //
 // 说明：
-//   - 后端字段为 settleDays（结算天数），页面表单/列展示已对齐该字段；
+//   - 后端字段为 settleDays（结算天数）、holdForm（存单表单），页面表单已对齐；
+//   - holdForm 枚举：WARRANTY 保底把数 / REMARK 存单备注，名称含三角洲时新建默认 WARRANTY（与后端一致）；
 //   - 新增/编辑游戏时规格通过独立规格接口维护，见 createWithSpecs / updateWithSpecs；
 //   - SKU 映射相关接口（skuList / fetchSkusByProductIds / updateSku）暂无对应后端接口，
 //     暂保持本地 Mock，待后端提供接口文档后替换。
 // =====================================================================
+
+/** 存单表单选项：WARRANTY 保底把数；REMARK 存单备注 */
+export const HOLD_FORM_OPTIONS = [
+  { value: 'WARRANTY', label: '保底把数' },
+  { value: 'REMARK', label: '存单备注' },
+];
+
+/**
+ * 兼容后端返回结构差异，归一化为数组：
+ * 数组原样返回；对象则尝试提取 list / records / items / data 数组字段；其余返回空数组
+ * @param {any} value
+ * @returns {Array}
+ */
+function toArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.list)) return value.list;
+    if (Array.isArray(value.records)) return value.records;
+    if (Array.isArray(value.items)) return value.items;
+    if (Array.isArray(value.data)) return value.data;
+  }
+  return [];
+}
 
 export const gameApi = {
   // ============ 游戏主表 ============
 
   /**
    * 游戏列表（接口全量返回，本地分页/筛选由页面处理）
+   * 返回已归一化的数组，兼容后端 data 为数组或 { list } 等包裹结构
    * @returns {Promise<Array<{id:number, name:string, status?:string, settleDays?:number, createTime?:string}>>}
    */
-  list: () => request.get('/api/admin/games'),
+  list: async () => toArray(await request.get('/api/admin/games')),
 
-  /** 新增游戏 @param {{name:string, settleDays:number}} data */
-  create: ({ name, settleDays }) => request.post('/api/admin/games', { name, settleDays }),
+  /** 新增游戏 @param {{name:string, settleDays:number, holdForm?:string}} data */
+  create: ({ name, settleDays, holdForm }) =>
+    request.post('/api/admin/games', { name, settleDays, holdForm }),
 
-  /** 编辑游戏 @param {number} id @param {{name:string, settleDays:number}} data */
-  update: (id, { name, settleDays }) =>
-    request.put(`/api/admin/games/${id}`, { name, settleDays }),
+  /** 编辑游戏 @param {number} id @param {{name:string, settleDays:number, holdForm?:string}} data */
+  update: (id, { name, settleDays, holdForm }) =>
+    request.put(`/api/admin/games/${id}`, { name, settleDays, holdForm }),
 
   /** 删除游戏（软删） @param {number} id */
   remove: (id) => request.del(`/api/admin/games/${id}`),
 
   // ============ 游戏规格 ============
 
-  /** 规格列表 @param {number} gameId */
-  specs: (gameId) => request.get(`/api/admin/games/${gameId}/specs`),
+  /** 规格列表（返回已归一化数组）@param {number} gameId */
+  specs: async (gameId) => toArray(await request.get(`/api/admin/games/${gameId}/specs`)),
 
   /** 新增规格 @param {number} gameId @param {string} name */
   createSpec: (gameId, name) => request.post(`/api/admin/games/${gameId}/specs`, { name }),
@@ -56,10 +82,10 @@ export const gameApi = {
 
   /**
    * 新增游戏 + 批量新增规格
-   * @param {{name:string, settleDays:number, specs:string[]}} data
+   * @param {{name:string, settleDays:number, holdForm?:string, specs:string[]}} data
    */
-  createWithSpecs: async ({ name, settleDays, specs = [] } = {}) => {
-    const game = await gameApi.create({ name, settleDays });
+  createWithSpecs: async ({ name, settleDays, holdForm, specs = [] } = {}) => {
+    const game = await gameApi.create({ name, settleDays, holdForm });
     if (specs.length) {
       await Promise.all(specs.map((specName) => gameApi.createSpec(game.id, specName)));
     }
@@ -69,10 +95,10 @@ export const gameApi = {
   /**
    * 编辑游戏 + 规格差异同步（新增缺失规格、删除多余规格，名称变更按“删旧增新”处理）
    * @param {number} id 游戏 ID
-   * @param {{name:string, settleDays:number, specs:string[]}} data
+   * @param {{name:string, settleDays:number, holdForm?:string, specs:string[]}} data
    */
-  updateWithSpecs: async (id, { name, settleDays, specs = [] } = {}) => {
-    await gameApi.update(id, { name, settleDays });
+  updateWithSpecs: async (id, { name, settleDays, holdForm, specs = [] } = {}) => {
+    await gameApi.update(id, { name, settleDays, holdForm });
     const current = (await gameApi.specs(id)) || [];
     const currentNames = new Set(current.map((s) => s.name));
     const targetSet = new Set(specs);
@@ -89,16 +115,16 @@ export const gameApi = {
 
   /** 全部游戏（供 SKU 映射 / 玩家 / 俱乐部下拉选择），附带各游戏规格名 */
   all: async () => {
-    const games = (await gameApi.list()) || [];
+    const games = toArray(await gameApi.list());
     return Promise.all(
       games.map(async (g) => {
         let specs = [];
         try {
-          specs = (await gameApi.specs(g.id)) || [];
+          specs = toArray(await gameApi.specs(g.id));
         } catch {
           // 单个游戏规格拉取失败不阻塞整个下拉列表
         }
-        return { id: g.id, name: g.name, specs: specs.map((s) => s.name) };
+        return { id: g.id, name: g.name, specs: specs.map((s) => s.name ?? s) };
       })
     );
   },

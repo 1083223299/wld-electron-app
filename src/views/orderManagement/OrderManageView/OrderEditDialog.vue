@@ -1,18 +1,20 @@
 <script setup>
-import { computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
 import { TYPE_OPTIONS, slotSourceText } from '../../../api/modules/order';
+import { fileApi } from '../../../api/modules/file';
 import { CLIENT_OPTIONS, STATUS_CLASS } from './mockData';
 
 /**
- * 订单编辑弹窗内容（接口联调 + 原型 UI 恢复，依据最新 OpenAPI 2026-10-20）
+ * 订单编辑弹窗内容（接口联调 + 原型 UI 恢复，依据最新 OpenAPI 2026-10-21）
  * 保存接口：POST /api/admin/orders/{id}/maintain 维护订单信息
  * 支持字段：gameId / specId / clients / orderType / playerCount / roleName / teamCode / remark
+ *          / amount（订单金额，单位元；不传保持原值；已退款订单不能改）
+ *          / groupQrUrl（企业群二维码；先 fileApi.upload 拿 url 再提交；传空串清除，不传保持原值）
  * - 所属客服（领取人）：本弹窗只读展示，不在此修改；修改入口在列表「领取人」列行内铅笔，
  *   独立弹窗调 PUT /{id}/owner（仅管理员）
- * - 组队码 teamCode：maintain 已支持（新 OpenAPI），随保存提交
  * - 仍缺（保留原型 UI，本地展示/编辑、提交不携带，待后端补充）：
- *   企鹅群二维码、存单（押金单/保底截图）、完成凭证、陪玩备注、派单打手名单
+ *   存单（押金单/保底截图）、完成凭证、陪玩备注、派单打手名单
  * - 打手信息来自 slots（名额列表：slotNo/playerId/source），接单/转单时间字段接口未提供
  */
 const props = defineProps({
@@ -36,6 +38,8 @@ const specOptions = computed(() => {
 const isProgress = computed(() => props.row.status === '进行中');
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
+/* 已退款订单不允许修改金额（接口约束） */
+const isRefunded = computed(() => !!props.row.refunded || Number(props.row.refundedAmount) > 0);
 
 const players = computed(() =>
   (props.row.slots || []).map((s) => ({
@@ -62,8 +66,11 @@ const form = reactive({
   roleName: '',
   teamCode: '', // 组队码：maintain 已支持（新 OpenAPI），随保存提交
   remark: '',
+  /* 订单金额（元）：maintain 支持 amount；不传保持原值，已退款不可改 */
+  amount: '',
+  /* 企业群二维码：maintain 支持 groupQrUrl；先 fileApi.upload 拿 url 再提交，传空串清除 */
+  groupQrUrl: '',
   /* ---- 以下字段接口未提供：本地展示/编辑，提交不携带（待后端补充） ---- */
-  qrImg: '',
   depositTarget: '1000',
   depositReason: '',
   depositFirst: '500',
@@ -85,7 +92,8 @@ watch(
       roleName: row.roleName || '',
       teamCode: row.teamCode || row.groupCode || '',
       remark: row.remark || '',
-      qrImg: row.qrImg || '',
+      amount: row.amount ?? '',
+      groupQrUrl: row.groupQrUrl || '',
       depositTarget: row.depositTarget || '1000',
       depositReason: row.depositReason || '',
       depositFirst: row.depositFirst || '500',
@@ -115,7 +123,31 @@ async function copyText(text) {
   show('已复制', 'success');
 }
 
-/* ===== 图片上传（本地 FileReader → base64 回显；接口未提供上传，提交不携带） ===== */
+/* ===== 图片上传：企业群二维码走 fileApi.upload（POST /api/admin/files/upload）；存单截图仍为本地展示 ===== */
+const qrUploading = ref(false);
+
+async function uploadSingle(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  if (!file.type.startsWith('image/')) return show('请选择图片文件', 'warning');
+  qrUploading.value = true;
+  try {
+    const res = await fileApi.upload(file);
+    form.groupQrUrl = res.url;
+    show('图片已上传', 'success');
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  } finally {
+    qrUploading.value = false;
+  }
+}
+
+function removeQr() {
+  form.groupQrUrl = '';
+}
+
+/* 存单截图仍为本地 FileReader → base64 展示（接口未提供） */
 function readAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -123,16 +155,6 @@ function readAsDataUrl(file) {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-}
-
-async function uploadSingle(e) {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  if (!file.type.startsWith('image/')) return show('请选择图片文件', 'warning');
-  const dataUrl = await readAsDataUrl(file);
-  form.qrImg = dataUrl;
-  e.target.value = '';
-  show('图片已上传（仅本地展示，上传接口待后端补充）', 'success');
 }
 
 async function uploadDeposit(e) {
@@ -156,7 +178,14 @@ function removeDeposit(index) {
 function submit() {
   if (!form.gameId) return show('请选择游戏名称', 'warning');
   if (!form.specId) return show('请选择游戏规格', 'warning');
-  // 提交维护接口支持的字段（含 teamCode）；二维码/存单/凭证等字段接口未提供，提交不携带（待后端补充）
+  // 金额：不传保持原值；已退款订单不能改（前端禁用输入兜底）
+  let amount;
+  if (!isRefunded.value && String(form.amount).trim() !== '') {
+    const n = Number(form.amount);
+    if (!Number.isFinite(n) || n < 0) return show('请输入正确的订单金额', 'warning');
+    amount = n;
+  }
+  // 提交维护接口支持的字段；存单/凭证等字段接口未提供，提交不携带（待后端补充）
   emit('save', {
     gameId: Number(form.gameId),
     specId: Number(form.specId),
@@ -166,6 +195,8 @@ function submit() {
     roleName: String(form.roleName || '').trim(),
     teamCode: String(form.teamCode || '').trim(),
     remark: String(form.remark || '').trim(),
+    ...(amount !== undefined ? { amount } : {}),
+    groupQrUrl: form.groupQrUrl || '',
   });
 }
 
@@ -258,21 +289,29 @@ defineExpose({ submit });
         </div>
         <div class="form-row">
           <label>订单金额(元)</label>
-          <strong>{{ money(row.amount) }}</strong>
+          <!-- maintain.amount：不传保持原值；已退款订单不能改（禁用） -->
+          <input
+            v-model="form.amount"
+            type="number"
+            step="0.01"
+            min="0"
+            :disabled="isRefunded"
+            placeholder="仅支持正数，最多两位小数"
+          />
         </div>
       </div>
       <div class="form-row">
         <label>企业群二维码</label>
+        <!-- groupQrUrl：先 fileApi.upload 拿 url，随 maintain 提交；传空串清除 -->
         <div class="upload-box">
-          <img v-if="form.qrImg" :src="form.qrImg" class="upload-thumb" alt="企业群二维码" />
+          <img v-if="form.groupQrUrl" :src="form.groupQrUrl" class="upload-thumb" alt="企业群二维码" />
           <span v-else class="upload-empty">未上传</span>
-          <label class="upload-btn">
-            上传图片
-            <input type="file" accept="image/*" hidden @change="uploadSingle" />
+          <label class="upload-btn" :class="{ disabled: qrUploading }">
+            {{ qrUploading ? '上传中…' : '上传图片' }}
+            <input type="file" accept="image/*" hidden :disabled="qrUploading" @change="uploadSingle" />
           </label>
-          <button v-if="form.qrImg" type="button" class="upload-remove" @click="form.qrImg = ''">删除</button>
+          <button v-if="form.groupQrUrl" type="button" class="upload-remove" @click="removeQr">删除</button>
         </div>
-        <!-- <p class="form-tip">二维码字段上传接口待后端补充，当前仅本地展示、保存不提交。</p> -->
       </div>
     </section>
 
@@ -496,6 +535,13 @@ defineExpose({ submit });
   box-shadow: 0 0 0 3px var(--input-focus-ring);
 }
 
+.form-row input[type='number']:disabled,
+.form-row > input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--input-bg);
+}
+
 .form-row textarea,
 .remark-area {
   flex: 1;
@@ -630,6 +676,11 @@ defineExpose({ submit });
 
 .upload-btn:hover {
   background: var(--primary-faint);
+}
+
+.upload-btn.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .upload-remove {

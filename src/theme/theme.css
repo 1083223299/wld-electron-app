@@ -92,7 +92,8 @@
   --input-border: #e8ecf3;
   --input-border-hover: rgba(106, 53, 255, 0.35);
   --input-focus-ring: rgba(106, 53, 255, 0.14);
-  --input-placeholder: #b4bcc9;
+  --input-placeholder: #372b46;
+  --input-one-placeholder: #7f768b;
   --control-border: #b9c2d0;
   --warning-text: #7a5b00;
 }
@@ -168,7 +169,8 @@
   --input-border: #dde6f2;
   --input-border-hover: rgba(37, 99, 235, 0.4);
   --input-focus-ring: rgba(37, 99, 235, 0.15);
-  --input-placeholder: #9fadc0;
+  --input-placeholder: #2f3641;
+  --input-one-placeholder: #8498ac;
   --control-border: #a9b9cf;
 }
 
@@ -243,7 +245,8 @@
   --input-border: #d7eae6;
   --input-border-hover: rgba(13, 148, 136, 0.4);
   --input-focus-ring: rgba(13, 148, 136, 0.15);
-  --input-placeholder: #93aaa6;
+  --input-placeholder: #33413d;
+  --input-one-placeholder: #7daa88;
   --control-border: #9ebdb6;
 }
 
@@ -318,7 +321,8 @@
   --input-border: #f0dde2;
   --input-border-hover: rgba(225, 29, 72, 0.4);
   --input-focus-ring: rgba(225, 29, 72, 0.15);
-  --input-placeholder: #b99aa6;
+  --input-placeholder: #2c2427;
+  --input-one-placeholder: #a88498;
   --control-border: #c9a6b2;
 }
 
@@ -395,6 +399,7 @@
   --input-border-hover: rgba(212, 164, 64, 0.5);
   --input-focus-ring: rgba(212, 164, 64, 0.2);
   --input-placeholder: #b3bdcf;
+  --input-one-placeholder: #c0c0c0;
   --control-border: rgba(255, 255, 255, 0.42);
   --warning-text: #e3b341;
 }

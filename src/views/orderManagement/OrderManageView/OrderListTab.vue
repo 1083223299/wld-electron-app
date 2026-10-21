@@ -21,6 +21,7 @@ import {
 import { gameApi } from '../../../api/modules/game';
 import { clubApi } from '../../../api/modules/club';
 import { playerApi } from '../../../api/modules/player';
+import { handoverApi } from '../../../api/modules/handover';
 import OrderDetailDialog from './OrderDetailDialog.vue';
 import OrderEditDialog from './OrderEditDialog.vue';
 import AuditDialog from './AuditDialog.vue';
@@ -256,7 +257,7 @@ function mapOrderRow(item = {}) {
     bound: !!item.parentOrderId,
     refunded: false, // 是否已退款接口待补充
     mainOrderNo: item.parentOrderId ? String(item.parentOrderId) : '',
-    qrImg: item.qrImg || '',
+    groupQrUrl: item.groupQrUrl || '', // 企业群二维码：maintain 支持，列表/详情已带回
     depositTarget: item.depositTarget || '1000',
     depositReason: item.depositReason || '',
     depositFirst: item.depositFirst || '500',
@@ -348,20 +349,17 @@ onMounted(async () => {
   fetchList();
 });
 
-/* ===== 表格列（依据原型列顺序） ===== */
+/* ===== 表格列（依据原型列顺序：本平台订单号/第三方订单号/订单金额（元）/购买项目/游戏名称/客户端/游戏规格/角色名/订单状态/审核状态/订单属性/领取人/创建时间/操作；标签并入订单状态列） ===== */
 const columns = [
-  { key: 'orderType', title: '订单类型' },
   { key: 'orderNo', title: '本平台订单号' },
   { key: 'thirdOrderNo', title: '第三方订单号' },
-  { key: 'channel', title: '渠道' },
-  { key: 'amount', title: '订单金额' },
+  { key: 'amount', title: '订单金额（元）' },
   { key: 'product', title: '购买项目' },
   { key: 'gameName', title: '游戏名称' },
   { key: 'clientType', title: '客户端' },
   { key: 'spec', title: '游戏规格' },
   { key: 'roleName', title: '角色名' },
   { key: 'status', title: '订单状态' },
-  { key: 'tags', title: '订单标签' },
   { key: 'auditStatus', title: '审核状态' },
   { key: 'attribute', title: '订单属性' },
   { key: 'claimer', title: '领取人' },
@@ -469,7 +467,7 @@ function mapDetail(item = {}) {
     bound: !!item.parentOrderId,
     refunded: false,
     mainOrderNo: item.parentOrderId ? String(item.parentOrderId) : '',
-    qrImg: item.qrImg || '',
+    groupQrUrl: item.groupQrUrl || '', // 企业群二维码：maintain 支持，详情已带回
     depositTarget: item.depositTarget || '1000',
     depositReason: item.depositReason || '',
     depositFirst: item.depositFirst || '500',
@@ -530,7 +528,7 @@ async function saveEdit(form) {
   const row = editRow.value;
   if (!row) return;
   try {
-    // 组队码：maintain 已支持 teamCode（新 OpenAPI）；二维码/存单/凭证等字段接口未提供，暂不提交（本地保留）
+    // amount：不传保持原金额，已退款订单后端拒绝修改；groupQrUrl：传空串清除，不传保持原值
     await orderApi.maintain(row.id, {
       gameId: form.gameId,
       specId: form.specId,
@@ -540,6 +538,8 @@ async function saveEdit(form) {
       roleName: form.roleName,
       teamCode: form.teamCode,
       remark: form.remark,
+      ...(form.amount !== undefined ? { amount: form.amount } : {}),
+      groupQrUrl: form.groupQrUrl,
     });
     // 领取人（所属客服）不在本弹窗修改：列表领取人列铅笔 → 独立弹窗调 PUT /{id}/owner
     editVisible.value = false;
@@ -877,30 +877,40 @@ async function submitCall() {
   }
 }
 
-/* ===== 修改领取客服（列表领取人列铅笔入口；仅管理员；接口：PUT /{id}/owner，ownerAccountId 必填。
-   客服列表接口待后端补充，当前先输入客服账号ID，列表接入后可换成下拉） ===== */
+/* ===== 修改领取客服（列表领取人列铅笔；仅 ADMIN；PUT /{id}/owner，ownerAccountId 必填；
+   候选人 GET /api/admin/accounts，KEFU 调用返回 403「仅管理员可修改领取客服」） ===== */
 const ownerVisible = ref(false);
 const ownerRow = ref(null);
 const ownerForm = reactive({ ownerAccountId: '' });
+const ownerOptions = ref([]); // [{ id, name }]
+const ownerLoading = ref(false);
 
-function openOwnerEdit(row) {
+async function openOwnerEdit(row) {
   ownerRow.value = row;
   Object.assign(ownerForm, { ownerAccountId: '' });
   ownerVisible.value = true;
+  ownerLoading.value = true;
+  try {
+    const list = await handoverApi.accounts({ status: 'NORMAL' });
+    ownerOptions.value = list.map((a) => ({ id: a.accountId, name: a.accountName }));
+  } catch {
+    ownerOptions.value = [];
+  } finally {
+    ownerLoading.value = false;
+  }
 }
 
 async function submitOwner() {
   const row = ownerRow.value;
   if (!row) return;
-  const n = Number(ownerForm.ownerAccountId);
-  if (!Number.isFinite(n) || n <= 0) return show('请输入正确的客服账号ID', 'warning');
+  if (!ownerForm.ownerAccountId) return show('请选择领取客服', 'warning');
   try {
-    await orderApi.changeOwner(row.id, { ownerAccountId: n });
+    await orderApi.changeOwner(row.id, { ownerAccountId: Number(ownerForm.ownerAccountId) });
     ownerVisible.value = false;
     show('领取客服修改成功', 'success');
     fetchList();
   } catch {
-    /* 错误提示由 request.js 统一弹出 */
+    /* 错误提示由 request.js 统一弹出（KEFU 403「仅管理员可修改领取客服」） */
   }
 }
 
@@ -1088,14 +1098,6 @@ async function submitAudit({ pass, reason }) {
         <button class="add-btn" @click="openAdd">新增</button>
       </template>
 
-      <template #cell-orderType="{ row }">
-        <span :class="['order-type-tag', { 'is-special': row.orderType === '特惠单' }]">{{ row.orderType || '常规单' }}</span>
-      </template>
-
-      <template #cell-channel="{ row }">
-        <span class="channel-tag">{{ (row.channel || '抖').slice(0, 1) }}</span>
-      </template>
-
       <template #cell-orderNo="{ row }">
         <span class="order-no-cell">
           <span v-if="row.orderType === '特惠单'" class="special-tag">特惠</span>
@@ -1122,13 +1124,6 @@ async function submitAudit({ pass, reason }) {
         </div>
       </template>
 
-      <template #cell-tags="{ row }">
-        <div class="status-wrap">
-          <span v-for="tag in row.tags" :key="tag" class="order-tag" :class="`tag-${tagClass(tag)}`">{{ tag }}</span>
-          <span v-if="!row.tags?.length" class="muted-text">—</span>
-        </div>
-      </template>
-
       <template #cell-auditStatus="{ row }">
         <span class="status-badge" :class="AUDIT_CLASS[row.auditStatus] || 'status-muted'">{{ row.auditStatus }}</span>
       </template>
@@ -1147,7 +1142,7 @@ async function submitAudit({ pass, reason }) {
           <span class="claimer-name">
             客服名：{{ row.claimerName || '—' }}
             <!-- 仅管理员可编辑修改领取客服（原型标注）：列表行内铅笔 → 独立弹窗 PUT /{id}/owner -->
-            <button v-if="isAdmin" class="owner-edit-btn" type="button" title="修改领取客服" @click="openOwnerEdit(row)">✎</button>
+            <button v-if="isAdmin && row.claimerName" class="owner-edit-btn" type="button" title="修改领取客服" @click="openOwnerEdit(row)">✎</button>
           </span>
         </div>
       </template>
@@ -1432,9 +1427,16 @@ async function submitAudit({ pass, reason }) {
           <strong>{{ ownerRow ? `${ownerRow.claimerName || '—'}（${ownerRow.claimerCorp || '—'}）` : '—' }}</strong>
         </div>
         <div class="form-row">
-          <label class="required">客服账号ID</label>
-          <input v-model="ownerForm.ownerAccountId" type="number" min="0" step="1" placeholder="请输入新领取客服的账号ID" />
-          <!-- <p class="form-tip">客服列表接口待后端补充，当前先输入客服账号ID；保存即调 PUT /{id}/owner。</p> -->
+          <label class="required">领取客服</label>
+          <el-select
+            v-model="ownerForm.ownerAccountId"
+            filterable
+            :loading="ownerLoading"
+            placeholder="请选择领取客服"
+            style="width: 100%"
+          >
+            <el-option v-for="item in ownerOptions" :key="item.id" :label="item.name" :value="item.id" />
+          </el-select>
         </div>
       </div>
       <template #footer>
