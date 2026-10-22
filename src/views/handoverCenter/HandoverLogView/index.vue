@@ -293,7 +293,15 @@ onMounted(() => {
         </div>
       </div>
 
-      <el-empty v-if="!loading && !list.length" description="暂无交接日志" />
+      <el-empty v-if="!loading && !list.length" description="暂无交接日志">
+        <template #image>
+          <img
+            class="empty-img"
+            src="../../../assets/images/noTransactionHistory.png"
+            alt="暂无交接日志"
+          />
+        </template>
+      </el-empty>
     </div>
 
     <!-- 分页（服务端分页） -->
@@ -585,6 +593,28 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* ===== 空状态（noTransactionHistory.png 居中展示） ===== */
+.card-grid :deep(.el-empty) {
+  padding: 48px 0 24px;
+}
+
+.card-grid :deep(.el-empty__image) {
+  height: auto;
+  display: flex;
+  justify-content: center;
+}
+
+.empty-img {
+  width: 96px;
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+
+.card-grid :deep(.el-empty__description p) {
+  color: var(--text-sub);
+  font-size: 13px;
 }
 
 /* ===== 分页 ===== */

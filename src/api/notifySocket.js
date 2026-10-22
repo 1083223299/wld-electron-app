@@ -113,9 +113,10 @@ function startMockEngine(emit) {
   let stopWatch = null;
   let stuckMinutes = 10;
 
-  // 读取待接单卡单时长（STUCK，用于文案展示超时分钟数）
-  orderConfigApi.get().then((res) => {
-    stuckMinutes = Number(res?.stuckMinutes) || 10;
+  // 读取待接单时长（WAIT_TAKE，用于文案展示超时分钟数）
+  orderConfigApi.get().then((list) => {
+    const item = (Array.isArray(list) ? list : []).find((x) => x && x.code === 'WAIT_TAKE');
+    stuckMinutes = Number(item?.minutes) || 10;
   });
 
   const scan = (opts = {}) => {

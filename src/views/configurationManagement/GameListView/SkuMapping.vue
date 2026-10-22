@@ -5,6 +5,7 @@ import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useToast } from '../../../composables/useToast';
 import { gameApi } from '../../../api/modules/game';
+import { channelApi } from '../../../api/modules/channel';
 
 const props = defineProps({
   gameId: { type: Number, default: null },
@@ -18,11 +19,33 @@ const currentGameId = computed(() => props.gameId);
 const currentGameName = computed(() => props.gameName);
 
 // ============ 店铺（渠道）tabs ============
-// 当前只有抖音一个店铺，预留多店铺扩展
-const shops = [
-  { channel: '抖音', shop: '张三店铺' },
-];
-const activeShop = ref(shops[0]);
+// 店铺列表来自渠道配置（channelApi.all，含真实 shopId）；接口异常时兜底默认店铺
+const shops = ref([{ channel: '抖音', shop: '张三店铺', shopId: '' }]);
+const activeShop = ref(shops.value[0]);
+
+async function loadShops() {
+  try {
+    const list = await channelApi.all();
+    if (Array.isArray(list) && list.length) {
+      shops.value = list.map((c) => ({
+        channel: c.channel || c.channelCode || '',
+        // 展示名兜底：shopName → 渠道名 → shopId，避免出现空标签按钮
+        shop: c.shopName || c.channel || c.channelCode || c.shopId || '',
+        shopId: c.shopId || '',
+      }));
+      activeShop.value = shops.value[0];
+    }
+  } catch {
+    /* 保持默认店铺 */
+  }
+}
+
+/** 切换店铺：重置页码并按 shopId 重新拉取 */
+function selectShop(s) {
+  activeShop.value = s;
+  page.value = 1;
+  fetchList();
+}
 
 // ============ 筛选 ============
 const filter = reactive({
@@ -33,9 +56,9 @@ const filter = reactive({
 });
 
 const searchFields = [
-  { prop: 'productId', label: '商品ID', type: 'input', placeholder: '请输入游戏ID', span: 5 },
+  { prop: 'productId', label: '商品ID', type: 'input', placeholder: '请输入商品ID', span: 5 },
   { prop: 'skuId', label: 'SKUID', type: 'input', placeholder: '请输入SKUID', span: 5 },
-  { prop: 'skuName', label: 'SKU名称', type: 'input', placeholder: '请输入游戏名称', span: 5 },
+  { prop: 'skuName', label: 'SKU名称', type: 'input', placeholder: '请输入SKU名称', span: 5 },
   {
     prop: 'matched',
     label: '是否匹配',
@@ -67,17 +90,29 @@ const columns = [
 ];
 
 async function fetchList() {
+  // 真实接口 GET /api/admin/sku-mappings：行字段 { id, shopId, productId, skuId, gameId, specId, clients, itemName }
   const res = await gameApi.skuList({
     page: page.value,
     pageSize: pageSize.value,
-    gameId: currentGameId.value,
+    shopId: activeShop.value.shopId || '',
     productId: filter.productId,
     skuId: filter.skuId,
     skuName: filter.skuName,
     matched: filter.matched,
+    gameId: currentGameId.value,
   });
-  rows.value = res.list || [];
-  total.value = res.total || 0;
+  rows.value = ((res && res.list) || []).map((it) => ({
+    ...it,
+    skuName: it.itemName || '',
+    client: String(it.clients || '')
+      .split(',')
+      .map((c) => CLIENT_EN[String(c).trim()] || c.trim())
+      .filter(Boolean),
+    gameName: gameNameOf(it.gameId),
+    spec: specNameOf(it.gameId, it.specId),
+    matched: !!(it.gameId && it.specId),
+  }));
+  total.value = (res && res.total) || 0;
 }
 
 function handleSearch(values) {
@@ -100,10 +135,39 @@ function pageChange(p) {
   fetchList();
 }
 
-// ============ 全部游戏（供编辑弹窗搜索联想） ============
-const allGames = ref([]);
+// ============ 全部游戏（供编辑弹窗搜索联想；规格带 id，保存映射需 specId） ============
+const allGames = ref([]); // [{ id, name, specs: [{ id, name }] }]
 async function loadAllGames() {
-  allGames.value = await gameApi.all();
+  const games = (await gameApi.list()) || [];
+  allGames.value = await Promise.all(
+    (games || []).map(async (g) => {
+      let specs = [];
+      try {
+        const list = await gameApi.specs(g.id);
+        specs = (list || []).map((s) => ({ id: s.id, name: s.name ?? s }));
+      } catch {
+        specs = [];
+      }
+      return { id: g.id, name: g.name, specs };
+    })
+  );
+}
+
+/** 后端客户端枚举 → 页面中文 */
+const CLIENT_EN = { PC: '端游', MOBILE: '手游' };
+/** 页面中文 → 后端枚举（多选时逗号分隔） */
+const CLIENT_CN = { 端游: 'PC', 手游: 'MOBILE' };
+
+function gameNameOf(gameId) {
+  const g = allGames.value.find((x) => x.id === gameId);
+  return g ? g.name : '';
+}
+
+function specNameOf(gameId, specId) {
+  if (!gameId || !specId) return '';
+  const g = allGames.value.find((x) => x.id === gameId);
+  const s = g && g.specs.find((x) => x.id === specId);
+  return s ? s.name : '';
 }
 
 // ============ 添加商品弹窗 ============
@@ -133,7 +197,7 @@ const editForm = reactive({
   client: [],
   gameId: null,
   gameName: '',
-  spec: '',
+  specId: null, // 规格 ID（保存映射用），展示名由 specOptions 反查
   gameSearch: '', // 搜索关键字
 });
 
@@ -167,9 +231,9 @@ const specOptions = computed(() => {
 function openEdit(row) {
   editingRow.value = row;
   editForm.client = [...(row.client || [])];
-  editForm.gameId = row.gameId;
+  editForm.gameId = row.gameId || null;
   editForm.gameName = row.gameName || '';
-  editForm.spec = row.spec || '';
+  editForm.specId = row.specId || null;
   editForm.gameSearch = row.gameName || '';
   gameDropdownOpen.value = false;
   editVisible.value = true;
@@ -179,7 +243,7 @@ function onGamePick(game) {
   editForm.gameId = game.id;
   editForm.gameName = game.name;
   editForm.gameSearch = game.name;
-  editForm.spec = ''; // 切换游戏后清空规格
+  editForm.specId = null; // 切换游戏后清空规格
   gameDropdownOpen.value = false;
 }
 
@@ -196,16 +260,21 @@ async function submitEdit() {
     show('请选择游戏名称', 'warning');
     return;
   }
-  if (!editForm.spec) {
+  if (!editForm.specId) {
     show('请选择游戏规格', 'warning');
     return;
   }
+  const row = editingRow.value;
+  // 真实接口 PUT /api/admin/sku-mappings：clients 传英文枚举，多选逗号分隔（格式以后端契约为准）
   await gameApi.updateSku({
-    id: editingRow.value.id,
-    client: editForm.client,
-    gameId: editForm.gameId,
-    gameName: editForm.gameName,
-    spec: editForm.spec,
+    id: row.id,
+    shopId: row.shopId,
+    productId: row.productId,
+    skuId: row.skuId,
+    gameId: Number(editForm.gameId),
+    specId: Number(editForm.specId),
+    clients: editForm.client.map((c) => CLIENT_CN[c] || c).join(','),
+    itemName: row.skuName || row.itemName || '',
   });
   show('保存成功', 'success');
   editVisible.value = false;
@@ -216,10 +285,11 @@ function goBack() {
   emit('back');
 }
 
-onMounted(() => {
-  loadAllGames();
-  fetchList();
+onMounted(async () => {
   document.addEventListener('click', onDocClick);
+  // 店铺与游戏目录都就绪后再拉列表，保证游戏名/规格、店铺筛选首屏正确
+  await Promise.all([loadShops(), loadAllGames()]);
+  fetchList();
 });
 
 onBeforeUnmount(() => {
@@ -239,23 +309,26 @@ watch(currentGameId, () => {
       <div class="sku-title-row">
         <button class="back-link" @click="goBack">&lt; 返回</button>
         <h2 class="sku-title">sku映射</h2>
+        <span v-if="activeShop && activeShop.shop" class="shop-badge">
+          当前店铺：{{ activeShop.shop }}
+        </span>
         <span v-if="currentGameName" class="sku-subtitle">当前游戏：{{ currentGameName }}</span>
       </div>
-
-      <!-- 渠道 / 店铺 tabs -->
-      <div class="shop-tabs">
-        <button
-          v-for="s in shops"
-          :key="s.shop"
-          type="button"
-          class="shop-tab"
-          :class="{ active: activeShop.shop === s.shop }"
-          @click="activeShop = s"
-        >
-          {{ s.shop }}
-        </button>
-      </div>
     </div>
+
+    <!-- 店铺切换 tabs（按钮展示 shopName） -->
+    <!-- <div class="shop-tabs">
+      <button
+        v-for="s in shops"
+        :key="s.shopId || s.shop"
+        type="button"
+        class="shop-tab"
+        :class="{ active: (activeShop.shopId || activeShop.shop) === (s.shopId || s.shop) }"
+        @click="selectShop(s)"
+      >
+        {{ s.shop }}
+      </button>
+    </div> -->
 
     <!-- 筛选 -->
     <div class="list-page__search">
@@ -367,11 +440,11 @@ watch(currentGameId, () => {
 
         <div class="form-row">
           <label class="required">游戏规格</label>
-          <select v-model="editForm.spec" :disabled="!editForm.gameId" class="form-control">
+          <select v-model="editForm.specId" :disabled="!editForm.gameId" class="form-control">
             <option value="" disabled>
               {{ editForm.gameId ? '请选择规格' : '请先选择游戏' }}
             </option>
-            <option v-for="s in specOptions" :key="s" :value="s">{{ s }}</option>
+            <option v-for="s in specOptions" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
           <div v-if="editForm.gameName" class="current-value">
             已选：<strong>{{ editForm.gameName }}</strong>
@@ -432,12 +505,28 @@ watch(currentGameId, () => {
   color: #8a93a6;
 }
 
-.shop-tabs {
+/* 顶部当前店铺徽标 */
+.shop-badge {
   display: inline-flex;
+  align-items: center;
   gap: 6px;
-  padding: 4px;
-  background: #f2f4f7;
-  border-radius: 10px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft, rgba(139, 92, 246, 0.1));
+  border: 1px solid var(--primary-border, rgba(139, 92, 246, 0.25));
+}
+
+.shop-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-elevated, #f2f4f7);
+  border: 1px solid var(--border-soft, transparent);
+  border-radius: 12px;
 }
 
 .shop-tab {
@@ -446,15 +535,19 @@ watch(currentGameId, () => {
   padding: 7px 16px;
   border-radius: 8px;
   font-size: 13px;
-  color: #475467;
+  color: var(--text-sub, #475467);
   cursor: pointer;
   transition: all 0.18s ease;
 }
 
+.shop-tab:hover {
+  color: var(--primary, #8b5cf6);
+}
+
 .shop-tab.active {
   background: linear-gradient(135deg, var(--primary), var(--primary-hover));
-  color: var(--text-invert);
-  box-shadow: 0 8px 18px var(--primary-glow-strong);
+  color: var(--text-invert, #fff);
+  box-shadow: 0 8px 18px var(--primary-glow-strong, rgba(139, 92, 246, 0.35));
 }
 
 .muted {
@@ -487,7 +580,7 @@ watch(currentGameId, () => {
 }
 
 .form-row label {
-  color: #5b6478;
+  /* color: #5b6478; */
   font-size: 12px;
   font-weight: 600;
 }
@@ -538,7 +631,7 @@ watch(currentGameId, () => {
   gap: 10px;
   flex-wrap: wrap;
   padding: 10px 12px;
-  background: #fafbff;
+  /* background: #fafbff; */
   border: 1px solid #eef1f8;
   border-radius: 12px;
 }
@@ -577,7 +670,7 @@ watch(currentGameId, () => {
   height: 42px;
   border: 1px solid #e3e7f0;
   border-radius: 12px;
-  background: #fbfcfe;
+  /* background: #fbfcfe; */
   cursor: pointer;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
   font-size: 13px;
@@ -594,7 +687,7 @@ watch(currentGameId, () => {
 }
 
 .select-value {
-  color: #1f2937;
+  /* color: #1f2937; */
   font-weight: 500;
 }
 

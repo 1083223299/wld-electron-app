@@ -1,41 +1,25 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useToast } from '../../../composables/useToast';
 import { orderConfigApi } from '../../../api/modules/orderConfig';
 
 const { show } = useToast();
 
-// ============ 表单数据（字段 key 与 orderConfig.js 的 TIMEOUT_ITEMS 对齐） ============
-const form = reactive({
-  grabMinutes: '', // 待接单抢单时长（WAIT_TAKE）
-  takeTimeoutMinutes: '', // 接单后未提交验收（TAKE_TIMEOUT）
-  stuckMinutes: '', // 待接单卡单（STUCK）
-});
-
+// 配置行直接来自 GET 返回：name 为后端标签，minutes 为分钟数（存字符串便于输入拦截）
+const rows = ref([]);
 const loading = ref(false); // 加载中
 const submitting = ref(false); // 提交中
-
-// 可配项（label / 字段 key / 说明）
-const fields = [
-  { key: 'grabMinutes', label: '待接单抢单时长', tip: '打手进入抢单大厅后，超过该时长未接单视为超时（读取优先 WAIT_TAKE，无则取 GRAB）' },
-  { key: 'takeTimeoutMinutes', label: '接单后未提交验收', tip: '打手接单后，超过该时长仍未提交验收视为超时' },
-  { key: 'stuckMinutes', label: '待接单卡单', tip: '待接单状态超过该时长视为卡单' },
-];
-
-// 现网暂无超时 code 的环节：灰显，不做可配项
-const lockedFields = [
-  { label: '待领取', tip: '订单进入领取大厅的超时配置暂未开放' },
-  { label: '待派单', tip: '客服派单环节的超时配置暂未开放' },
-];
 
 // ============ 拉取配置 ============
 async function fetchConfig() {
   loading.value = true;
   try {
-    const res = await orderConfigApi.get();
-    form.grabMinutes = res?.grabMinutes ?? '';
-    form.takeTimeoutMinutes = res?.takeTimeoutMinutes ?? '';
-    form.stuckMinutes = res?.stuckMinutes ?? '';
+    const list = await orderConfigApi.get();
+    rows.value = (Array.isArray(list) ? list : []).map((it) => ({
+      name: it.name,
+      code: it.code,
+      minutes: it.minutes != null ? String(it.minutes) : '',
+    }));
   } finally {
     loading.value = false;
   }
@@ -43,23 +27,19 @@ async function fetchConfig() {
 
 // ============ 正整数校验 ============
 // 输入时拦截：只能输入数字（首位不能为 0，避免 "010" 这种）
-function onInput(fieldKey, e) {
-  let v = e.target.value;
-  // 只保留数字
-  v = v.replace(/\D/g, '');
-  // 去掉前导 0
-  v = v.replace(/^0+/, '');
-  form[fieldKey] = v;
+function onInput(row, e) {
+  let v = e.target.value.replace(/\D/g, '').replace(/^0+/, '');
+  row.minutes = v;
 }
 
 // 提交前校验：返回错误信息，null 表示通过
 function validate() {
-  for (const f of fields) {
-    const v = String(form[f.key] ?? '').trim();
-    if (v === '') return `请输入${f.label}时长`;
-    if (!/^\d+$/.test(v)) return `${f.label}时长仅支持输入正整数`;
-    if (Number(v) <= 0) return `${f.label}时长必须为大于 0 的正整数`;
-    if (Number(v) > 9999) return `${f.label}时长不能超过 9999 分钟`;
+  for (const row of rows.value) {
+    const v = String(row.minutes ?? '').trim();
+    if (v === '') return `请输入${row.name}时长`;
+    if (!/^\d+$/.test(v)) return `${row.name}时长仅支持输入正整数`;
+    if (Number(v) <= 0) return `${row.name}时长必须为大于 0 的正整数`;
+    if (Number(v) > 9999) return `${row.name}时长不能超过 9999 分钟`;
   }
   return null;
 }
@@ -73,11 +53,7 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    await orderConfigApi.save({
-      grabMinutes: Number(form.grabMinutes),
-      takeTimeoutMinutes: Number(form.takeTimeoutMinutes),
-      stuckMinutes: Number(form.stuckMinutes),
-    });
+    await orderConfigApi.save(rows.value);
     // 保存成功后重新拉取，回显服务端最新值
     await fetchConfig();
     show('保存成功', 'success');
@@ -96,37 +72,25 @@ onMounted(fetchConfig);
     <div class="config-card">
       <div class="card-title">
         <strong>卡单时长配置</strong>
-        <span class="subtitle">配置订单各节点的超时与卡单时长，超时未流转将触发对应提醒</span>
+        <!-- <span class="subtitle">配置订单各节点的超时与卡单时长，超时未流转将触发对应提醒</span> -->
       </div>
 
       <div v-if="loading" class="loading-tip">加载中...</div>
 
       <template v-else>
-        <!-- 可配项 -->
-        <div v-for="f in fields" :key="f.key" class="form-row">
-          <label class="form-label">{{ f.label }}</label>
+        <!-- 配置项：标签与顺序均取 GET 返回的 name -->
+        <div v-for="(row, idx) in rows" :key="row.code || row.name || idx" class="form-row">
+          <label class="form-label">{{ row.name }}</label>
           <div class="field-wrap">
             <input
-              :value="form[f.key]"
+              :value="row.minutes"
               type="text"
               inputmode="numeric"
               placeholder="请输入正整数"
-              @input="onInput(f.key, $event)"
+              @input="onInput(row, $event)"
             />
             <span class="unit">分钟</span>
           </div>
-          <!-- <span class="field-tip">{{ f.tip }}</span> -->
-        </div>
-
-        <!-- 暂未开放项（灰显，不可编辑） -->
-        <div v-for="f in lockedFields" :key="f.label" class="form-row is-locked">
-          <label class="form-label">{{ f.label }}</label>
-          <div class="field-wrap">
-            <input class="locked-input" type="text" placeholder="暂未开放" disabled />
-            <span class="unit">分钟</span>
-            <span class="lock-badge">未开放</span>
-          </div>
-          <!-- <span class="field-tip">{{ f.tip }}</span> -->
         </div>
 
         <div class="footer">
@@ -170,7 +134,7 @@ onMounted(fetchConfig);
 
 .card-title strong {
   font-size: 16px;
-  color: #fdfdfd;
+  /* color: #fdfdfd; */
 }
 
 .card-title .subtitle {
@@ -290,7 +254,7 @@ onMounted(fetchConfig);
   transform: translateY(1px);
 }
 
-.btn-primary {
+/* .btn-primary {
   background: linear-gradient(135deg, #2563eb, #3b82f6);
   color: var(--text-invert);
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.28);
@@ -303,5 +267,5 @@ onMounted(fetchConfig);
 .btn-primary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
+} */
 </style>

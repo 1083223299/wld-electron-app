@@ -1,13 +1,8 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import avatar from '../assets/images/defaulIcon.png';
-import logo from '../assets/images/logo.png';
 import ThemePanel from './ThemePanel.vue';
 import SettingsPanel from './SettingsPanel.vue';
-
-const props = defineProps({
-  title: { type: String, default: '' },
-});
 
 const controls = window.windowControls;
 const isMaximized = ref(false);
@@ -39,14 +34,6 @@ onBeforeUnmount(() => {
 <template>
   <header class="topbar">
     <div class="toolbar-row">
-      <div class="title-wrap">
-        <img class="app-logo" :src="logo" alt="logo" />
-        <div class="title-block">
-          <!-- <span class="label">电商后台</span> -->
-          <strong>{{ props.title || '工作台' }}</strong>
-        </div>
-      </div>
-
       <div class="top-actions">
         <ThemePanel />
         <SettingsPanel />
@@ -99,38 +86,6 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   /* padding: 0 18px 0 14px; */
   width: 100%;
-}
-
-.title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-right: auto;
-}
-
-.app-logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.title-block {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-
-.title-block .label {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-sub);
-}
-
-.title-block strong {
-  font-size: 14px;
-  color: var(--text-main);
 }
 
 .top-actions {

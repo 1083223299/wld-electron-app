@@ -139,11 +139,25 @@ export const orderApi = {
   dispatch: (id, data = {}) => request.post(`/api/admin/orders/${id}/dispatch`, data),
 
   /**
-   * 指派打手到名额（人工派单）POST /api/club/orders/{orderId}/assignments
+   * 指派打手到名额（管理端）POST /api/admin/orders/{id}/assignments
    * body: { slots: [{ slotNo: 1, playerId: 144587 }] }
-   * 注：后端说明截图为俱乐部端路径，管理端前缀以后端契约为准（如有 /api/admin 版本仅需替换前缀）
+   * 说明：俱乐部接单后管理端按名额指派打手；后端校验打手归属、在店状态及游戏规格
    */
-  assign: (orderId, data = {}) => request.post(`/api/club/orders/${orderId}/assignments`, data),
+  assign: (orderId, data = {}) => request.post(`/api/admin/orders/${orderId}/assignments`, data),
+
+  /**
+   * 订单分润明细 POST /api/admin/orders/{id}/profit-details
+   * 查询订单当前生效的分润快照及俱乐部、打手各名额份额；version 不传返回当前版本；
+   * 未锁定分润时 available=false。
+   * @param {number} id
+   * @param {{version?:number}} [params]
+   * @returns {Promise<{orderId:number,available:boolean,version:number,amount:number,clubBase:number,
+   *   clubMode:string,clubRate:number,clubFixed:number,playerMode:string,playerRate:number,playerFixed:number,
+   *   playerCount:number,platformAdjust:number,clubAdjust:number,platformAmount:number,clubAmount:number,
+   *   clubRetain:number,reason:string,refundId:string,shares:Array<{ownerType:string,ownerId:number,slotNo:number,
+   *   baseAmount:number,adjustAmount:number,amount:number,tailAmount:number}>}>}
+   */
+  profitDetail: (id, params = {}) => request.post(`/api/admin/orders/${id}/profit-details`, params),
 
   /** 审核验收 POST /api/admin/orders/{id}/audit（pass 必填，驳回必填 reason 最多50字） */
   audit: (id, data = {}) => request.post(`/api/admin/orders/${id}/audit`, data),
@@ -183,4 +197,32 @@ export const orderApi = {
 
   /** 订单日志 GET /api/admin/orders/{id}/logs（action/content/operatorName/createdAt） */
   logs: (id) => request.get(`/api/admin/orders/${id}/logs`),
+
+  /**
+   * 编辑存单 POST /api/admin/orders/{id}/hold
+   * 说明：只有进行中、未冻结、未售后能改，待接单不能调；不改变订单状态。
+   * 用订单详情 hold.form 决定表单（WARRANTY 填 warrantyTarget/reason/rounds/shots；REMARK 只填 remark）。
+   * stored=false 表示不存单并清空明细；warrantyTarget/rounds 单位是万，rounds 每把一个金额，最多 10 个；
+   * shots 最多 5 张 url（先走文件上传）；remark 最多 200 字。
+   * @param {number} id
+   * @param {{stored:boolean, warrantyTarget?:number, reason?:string, rounds?:number[], shots?:string[], remark?:string}} data
+   */
+  hold: (id, data = {}) => request.post(`/api/admin/orders/${id}/hold`, data),
+
+  /** 回退到待领取 POST /api/admin/orders/{id}/rollback（无 body；回退目标状态以后端契约为准） */
+  rollback: (id) => request.post(`/api/admin/orders/${id}/rollback`),
+
+  /**
+   * 可绑主单列表 GET /api/admin/orders/bindable-parents
+   * @param {{excludeId?:number, keyword?:string, page?:number, pageSize?:number}} params
+   * @returns {Promise<{total:number,page:number,pageSize:number,list:Array,statusCounts?:Object}>}
+   */
+  bindableParents: (params = {}) => request.get(`/api/admin/orders/bindable-parents${buildQuery(params)}`),
+
+  /**
+   * 批量解绑主单 POST /api/admin/orders/unbind
+   * @param {number[]} orderIds 待解绑的订单 ID 列表（可传单个）
+   * @returns {Promise<{successIds:number[], failures:{orderId:number,message:string}[]}>}
+   */
+  unbindBatch: (orderIds = []) => request.post('/api/admin/orders/unbind', { orderIds }),
 };

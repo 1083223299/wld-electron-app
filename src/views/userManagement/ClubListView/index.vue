@@ -688,7 +688,7 @@ onMounted(fetchList);
 <template>
   <div class="list-page">
     <div class="list-page__search">
-      <SearchComponent :fields="searchFields" :initial-values="filter" @search="handleSearch" @reset="handleReset" />
+      <SearchComponent :fields="searchFields" :initial-values="filter" @search="handleSearch" :labelWidth="97" @reset="handleReset" />
     </div>
 
     <DataTable

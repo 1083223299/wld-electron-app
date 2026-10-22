@@ -21,15 +21,33 @@ export const channelApi = {
     return Array.isArray(data) ? data : [];
   },
 
-  /** 全部渠道（供其他模块下拉选择） */
+  /**
+   * 全部店铺（供选择器使用，已把渠道下的 shops 拍平为店铺列表）
+   * 真实返回结构：data = [{ id, name(渠道名), code(渠道编码), editable,
+   *   shops: [{ id, shopId, shopName }] }]
+   * @returns {Promise<Array<{id:number, channel:string, channelCode:string, shopId:string, shopName:string}>>}
+   */
   all: async () => {
-    const list = await channelApi.list();
-    return list.map((c) => ({
-      id: c.id,
-      channelCode: c.channelCode,
-      shopId: c.shopId,
-      shopName: c.shopName,
-    }));
+    const data = await request.get('/api/admin/channels');
+    const channels = Array.isArray(data)
+      ? data
+      : data && Array.isArray(data.list)
+        ? data.list
+        : [];
+    const shops = [];
+    channels.forEach((ch) => {
+      const list = Array.isArray(ch.shops) ? ch.shops : [];
+      list.forEach((sh) => {
+        shops.push({
+          id: sh.id,
+          channel: ch.name || '',
+          channelCode: ch.code || '',
+          shopId: sh.shopId || '',
+          shopName: sh.shopName || '',
+        });
+      });
+    });
+    return shops;
   },
 
   /** 新增渠道 @param {{channelCode:string, shopId:string, shopName:string}} data */

@@ -8,7 +8,7 @@ export const toasts = reactive([]);
  * 该函数用于显示和管理提示消息(toast)
  */
 export function useToast() {
-  function show(message, type = 'success', duration = 2200) {
+  function show(message, type = 'success', duration = 2500) {
     const id = ++seed;
     toasts.push({ id, message, type });
     setTimeout(() => {

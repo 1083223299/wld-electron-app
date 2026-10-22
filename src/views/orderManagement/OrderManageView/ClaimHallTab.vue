@@ -252,7 +252,7 @@ function tagClass(tag) {
       </template>
     </DataTable>
 
-    <p class="perm-hint">仅客服角色可领取订单</p>
+    <!-- <p class="perm-hint">仅客服角色可领取订单</p> -->
 
     <AppModal v-model="claimVisible" title="领取" width="480px">
       <div class="claim-dialog">

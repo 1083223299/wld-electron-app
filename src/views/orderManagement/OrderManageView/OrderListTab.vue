@@ -45,9 +45,13 @@ import {
  *   status 枚举含 WAIT_CLAIM、列表/详情返回 teamCode（组队码）与 statusCounts（状态计数）、
  *   maintain 支持 teamCode、call body 支持 type 英文枚举、create body 支持 orderType/playerCount、
  *   游戏/规格 GET /games + /games/{id}/specs
- * - 仍缺（保留原型 UI/兜底，待后端补充）：可绑主单候选专用接口（勿 scope=ALL 硬筛，当前候选为空）、
- *   回退(待接单→待派单)、解绑 body 多选、派单指定打手、
- *   维护/审核的二维码/押金单/完单凭证/陪玩备注、分润明细、orderType 仅 NORMAL（特惠单枚举待补充）
+ * - 已补齐接入（后端已返回）：指派打手 POST /api/admin/orders/{id}/assignments（管理端路径，slots 结构不变）、
+ *   订单分润明细 POST /api/admin/orders/{id}/profit-details（详情/审核弹窗已接）、
+ *   订单详情扩展字段 refunded/children/parentOrderNo/hold（存单）/coverUrl/endUrl/progressUrls（凭证）/
+ *   playerRemark（陪玩备注）/roleName/gameName/specName/canChangeOwner 等已映射并展示，
+ *   可绑主单候选 GET /orders/bindable-parents、批量解绑 POST /orders/unbind、回退 POST /orders/{id}/rollback
+ * - 仍缺（保留原型 UI/兜底）：编辑存单 hold 独立入口、交易关闭 close 按钮（原型未要求，未擅自加）；
+ *   SPECIAL 订单类型已入后端映射，文档 orderType 参数枚举待同步（前端 ORDER_TYPE 已含 SPECIAL）
  */
 const { confirm } = useConfirm();
 const { show } = useToast();
@@ -249,27 +253,35 @@ function mapOrderRow(item = {}) {
     createTime: item.createdAt || '',
     orderType: typeText(item.orderType),
     orderTypeCode: item.orderType,
-    /* ---- 以下字段接口未返回，兜底供原型弹窗展示（待后端补充） ---- */
+    /* ---- 接口已返回（后端已补齐） ---- */
     roleName: item.roleName || '',
-    /* teamCode（组队码）：新 OpenAPI 列表/详情已返回 */
+    /* teamCode（组队码）：列表/详情已返回 */
     groupCode: item.teamCode || item.groupCode || '',
-    attribute: item.parentOrderId ? '子订单' : '—', // parentOrderId 已由列表/详情返回
+    /* 主子单：parentOrderNo 为主单订单号（详情返回），children 为子订单列表 */
+    attribute: item.attribute || (item.parentOrderId ? '子订单' : '—'),
     bound: !!item.parentOrderId,
-    refunded: false, // 是否已退款接口待补充
-    mainOrderNo: item.parentOrderId ? String(item.parentOrderId) : '',
-    groupQrUrl: item.groupQrUrl || '', // 企业群二维码：maintain 支持，列表/详情已带回
-    depositTarget: item.depositTarget || '1000',
-    depositReason: item.depositReason || '',
-    depositFirst: item.depositFirst || '500',
-    depositSecond: item.depositSecond || '500',
-    depositImages: item.depositImages || [],
-    depositRemark: item.depositRemark || '',
-    proofFirst: item.proofFirst || '',
-    proofLast: item.proofLast || '',
-    proofProcess: item.proofProcess || [],
+    mainOrderId: item.parentOrderId,
+    mainOrderNo: item.parentOrderNo || (item.parentOrderId ? String(item.parentOrderId) : ''),
+    children: item.children || [], // [{ id, orderNo }]
+    refunded: !!item.refunded, // 退款标记（接口已返回）
+    partialRefunded: Number(item.partialRefunded) === 1,
+    groupQrUrl: item.groupQrUrl || '', // 企业群二维码
+    /* 存单（hold 对象：form/stored/warrantyTarget/reason/rounds/shots/doneAmount/remainAmount/remark） */
+    hold: item.hold || null,
+    depositTarget: item.hold && item.hold.warrantyTarget != null ? String(item.hold.warrantyTarget) : (item.depositTarget || ''),
+    depositReason: (item.hold && item.hold.reason) || item.depositReason || '',
+    depositFirst: item.hold && item.hold.rounds && item.hold.rounds[0] != null ? String(item.hold.rounds[0]) : (item.depositFirst || ''),
+    depositSecond: item.hold && item.hold.rounds && item.hold.rounds[1] != null ? String(item.hold.rounds[1]) : (item.depositSecond || ''),
+    depositImages: (item.hold && item.hold.shots) || item.depositImages || [],
+    depositRemark: (item.hold && item.hold.remark) || item.depositRemark || '',
+    depositStored: item.hold ? !!item.hold.stored : false,
+    /* 完成凭证：coverUrl 首图 / endUrl 尾图 / progressUrls 进程图（接口已返回） */
+    proofFirst: item.coverUrl || '',
+    proofLast: item.endUrl || '',
+    proofProcess: item.progressUrls || [],
     proofUploadTime: item.proofUploadTime || '',
     playerRemark: item.playerRemark || '',
-    lastRejectReason: item.lastRejectReason || '',
+    lastRejectReason: item.rejectReason || item.lastRejectReason || '',
     statusCount: '',
   };
 }
@@ -619,16 +631,28 @@ async function submitAdd() {
   }
 }
 
-/* ===== 查看关系（主/子单关系数据接口待后端补充；当前仅展示本订单） ===== */
+/* ===== 查看关系（children/parentOrderNo 已由订单详情接口返回，行内缺失时拉详情） ===== */
 const relationVisible = ref(false);
 const relationRow = ref(null);
 const relationData = ref({ main: null, children: [] });
 
-function openRelation(row) {
+async function openRelation(row) {
   relationRow.value = row;
-  // parentOrderId 已由列表/详情返回（主单号可直接展示）；子订单列表（children）数据接口待补充
   relationData.value = { main: null, children: [] };
   relationVisible.value = true;
+  const useData = (d) => {
+    relationData.value.children = (d.children || []).filter((c) => c && c.orderNo);
+    if (d.parentOrderNo) relationData.value.main = { orderNo: d.parentOrderNo };
+  };
+  useData(row);
+  if (!relationData.value.children.length || !relationData.value.main) {
+    try {
+      const detail = await orderApi.detail(row.id);
+      if (detail) useData(detail);
+    } catch {
+      /* 详情拉取失败时保留行内已有数据 */
+    }
+  }
 }
 
 const relationMainNo = computed(() => {
@@ -645,12 +669,25 @@ const bindRow = ref(null);
 const bindForm = reactive({ parentOrderId: '' });
 const bindCandidates = ref([]); // [{ id, orderNo, spec }]
 
-/** 可绑主单候选：专用接口待后端补充（后端建议勿用 scope=ALL 硬筛），当前候选为空，等接口补齐后接入 */
-function openBindMain(row) {
+/** 可绑主单候选：GET /api/admin/orders/bindable-parents（excludeId 排除当前订单，避免绑自己） */
+async function openBindMain(row) {
   bindRow.value = row;
   bindForm.parentOrderId = '';
   bindCandidates.value = [];
   bindVisible.value = true;
+  try {
+    const res = await orderApi.bindableParents({ excludeId: row.id, page: 1, pageSize: 50 });
+    bindCandidates.value = ((res && res.list) || []).map((c) => ({
+      id: c.id,
+      orderNo: c.orderNo || '',
+      status: c.status || '',
+      statusText: statusText(c.status),
+      ownerName: c.ownerName || '',
+      spec: '',
+    }));
+  } catch {
+    bindCandidates.value = [];
+  }
 }
 
 async function submitBindMain() {
@@ -667,21 +704,35 @@ async function submitBindMain() {
   }
 }
 
-/* ===== 解绑（接口：POST /{id}/unbind，单订单解绑；多选依赖主/子单关系接口待补充） ===== */
+/* ===== 解绑（接口：POST /orders/unbind 批量；候选=主订单+当前订单，主单行追加 children 子订单） ===== */
 const unbindVisible = ref(false);
 const unbindRow = ref(null);
 const unbindOptions = ref([]);
 const unbindSelected = ref([]);
 
-function openUnbind(row) {
+async function openUnbind(row) {
   unbindRow.value = row;
   unbindSelected.value = [];
-  // parentOrderId 已返回：本订单为子订单时可列出主订单；子订单列表（children）接口待补充
   const options = [];
+  // 本订单为子订单时可列出主订单（parentOrderId/parentOrderNo 已返回）
   if (row.attribute === '子订单' && row.mainOrderNo) {
-    options.push({ no: row.mainOrderNo, label: '主订单' });
+    const parentId = Number(row.mainOrderNo);
+    if (Number.isFinite(parentId) && parentId > 0) {
+      options.push({ id: parentId, no: row.mainOrderNo, label: '主订单' });
+    }
   }
-  options.push({ no: row.orderNo, label: '当前订单' });
+  options.push({ id: row.id, no: row.orderNo, label: '当前订单' });
+  // 主订单行：拉详情取 children（子订单列表接口已返回），追加为解绑候选
+  if (row.attribute !== '子订单') {
+    try {
+      const detail = await orderApi.detail(row.id);
+      ((detail && detail.children) || []).forEach((c) => {
+        if (c && c.id && c.orderNo) options.push({ id: c.id, no: c.orderNo, label: `子订单·${c.orderNo}` });
+      });
+    } catch {
+      /* 详情拉取失败则仅保留基础候选 */
+    }
+  }
   unbindOptions.value = options;
   unbindVisible.value = true;
 }
@@ -691,10 +742,15 @@ async function submitUnbind() {
   if (!row) return;
   if (!unbindSelected.value.length) return show('请选择需要解绑的订单', 'warning');
   try {
-    // 解绑接口当前为单订单（POST /{id}/unbind）；解绑 body 多选待后端补充，接入后按选中逐单解绑
-    await orderApi.unbind(row.id);
+    // 批量解绑：POST /api/admin/orders/unbind（orderIds 传订单 ID 数组；选单项已存 ID）
+    const res = await orderApi.unbindBatch(unbindSelected.value);
+    const failures = (res && res.failures) || [];
+    if (failures.length) {
+      show(`部分解绑失败：${failures.map((f) => f.message || `订单${f.orderId}`).join('；')}`, 'warning');
+    } else {
+      show('解绑成功', 'success');
+    }
     unbindVisible.value = false;
-    show('解绑成功', 'success');
     fetchList();
   } catch {
     /* 错误提示由 request.js 统一弹出 */
@@ -942,8 +998,14 @@ async function unfreezeRow(row) {
 async function rollbackRow(row) {
   const ok = await confirm({ title: '回退', message: '进行二次确认，已接单人将被清除，订单回退为待派单。', okText: '确定' });
   if (!ok) return;
-  // 回退（待接单→待派单）接口待后端补充：确认后暂不生效，保持真实订单状态
-  show('回退接口待后端补充，暂未生效', 'warning');
+  // 回退：POST /api/admin/orders/{id}/rollback（文档名为「回退到待领取」，目标状态以后端契约为准，文案后续可再对齐）
+  try {
+    await orderApi.rollback(row.id);
+    show('回退成功', 'success');
+    fetchList();
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
 /* ===== 退款（接口：POST /{id}/refund 人工退款；原金额/部分退款展示依赖 refunded 字段接口待补充） ===== */
@@ -1250,7 +1312,7 @@ async function submitAudit({ pass, reason }) {
       </template>
     </AppModal>
 
-    <!-- 查看关系（parentOrderId 已返回；子订单列表数据待补充） -->
+    <!-- 查看关系（children/parentOrderNo 已由订单详情接口返回，行内缺失时拉详情） -->
     <AppModal v-model="relationVisible" title="查看关系" width="480px">
       <div class="relation-dialog">
         <div class="relation-row">
@@ -1261,7 +1323,7 @@ async function submitAudit({ pass, reason }) {
           <span>子订单</span>
           <div class="relation-list">
             <strong v-for="child in relationData.children" :key="child.orderNo">{{ child.orderNo }}</strong>
-            <span v-if="!relationData.children.length" class="muted-text">暂无子订单（子订单列表数据接口待后端补充）</span>
+            <span v-if="!relationData.children.length" class="muted-text">暂无子订单</span>
           </div>
         </div>
       </div>
@@ -1280,12 +1342,15 @@ async function submitAudit({ pass, reason }) {
         <div class="form-row">
           <label class="required">绑定主单</label>
           <el-select v-model="bindForm.parentOrderId" placeholder="请选择主订单" style="width: 100%" filterable>
-            <el-option v-for="opt in bindCandidates" :key="opt.id" :value="opt.id" :label="`${opt.spec || '未维护规格'} ${opt.orderNo}`">
+            <el-option v-for="opt in bindCandidates" :key="opt.id" :value="opt.id" :label="`${opt.orderNo}（${opt.statusText || opt.status || '—'}）`">
               <div class="bind-option">
-                <span class="bind-option__spec">{{ opt.spec || '未维护规格' }}</span>
-                <span class="bind-option__no">{{ opt.orderNo }}</span>
+                <span class="bind-option__spec">{{ opt.orderNo }}</span>
+                <span class="bind-option__no">{{ opt.statusText || opt.status || '—' }}</span>
               </div>
             </el-option>
+            <template v-if="!bindCandidates.length">
+              <el-option disabled :value="''" label="暂无可用主单候选（请确认订单状态/属性）" />
+            </template>
           </el-select>
           <!-- <p class="form-tip">可绑主单候选接口待后端补充（后端建议勿用全部订单列表硬筛），当前暂无候选可选。</p> -->
         </div>
@@ -1302,8 +1367,8 @@ async function submitAudit({ pass, reason }) {
         <div class="form-row">
           <label>选择要解绑的订单</label>
           <el-checkbox-group v-model="unbindSelected" class="checkbox-col">
-            <el-checkbox v-for="opt in unbindOptions" :key="opt.no" :value="opt.no">
-              {{ opt.label }}：{{ opt.no }}（当前订单号：{{ unbindRow?.orderNo }}）
+            <el-checkbox v-for="opt in unbindOptions" :key="opt.id" :value="opt.id">
+              {{ opt.label }}：{{ opt.no }}
             </el-checkbox>
           </el-checkbox-group>
         </div>

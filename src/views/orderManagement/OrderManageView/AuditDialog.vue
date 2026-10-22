@@ -1,13 +1,14 @@
 <script setup>
-import { computed, reactive, watch } from 'vue';
+import { computed, onMounted, reactive, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
+import { orderApi } from '../../../api/modules/order';
 
 /**
  * 订单审核弹窗内容（接口联调 + 原型 UI 恢复）
  * 提交接口：POST /api/admin/orders/{id}/audit（pass 必填，驳回必填 reason 最多50字）
  * - 数据来源：订单详情（platformAdjust/clubAdjust/settleDueAt 等）+ 订单日志（logs）
- * - 分润明细接口未提供，按原型比例（平台30%/俱乐部40%/打手30%）估算展示
- * - 完成凭证/打单备注等字段接口未返回，保留原型区块并兜底展示（待后端补充）
+ *   + POST /api/admin/orders/{id}/profit-details（订单分润明细）
+ * - 完成凭证：coverUrl 首图 / endUrl 尾图 / progressUrls 进程图（接口已返回）
  */
 const props = defineProps({
   row: { type: Object, required: true },
@@ -38,17 +39,40 @@ const adjustText = (value) => {
   return `${n > 0 ? '+' : '-'}${money(Math.abs(n))}元`;
 };
 
-/** 分润信息（接口未提供分润明细，按原型示例比例估算：平台30% / 俱乐部40% / 打手30%） */
+/* ===== 分润明细（POST /api/admin/orders/{id}/profit-details） ===== */
+const profitState = reactive({ loading: false, data: null, error: '' });
+
 const split = computed(() => {
-  const amount = Number(props.row.amount) || 0;
+  const d = profitState.data;
+  if (!d || d.available === false) return null;
+  const playerAmount = (d.shares || [])
+    .filter((s) => s.ownerType === 'PLAYER')
+    .reduce((sum, s) => sum + (Number(s.amount) || 0) + (Number(s.tailAmount) || 0), 0);
   return {
-    platform: money(amount * 0.3),
-    club: money(amount * 0.4),
-    player: money(amount * 0.3),
+    platform: money(d.platformAmount),
+    club: money(d.clubAmount),
+    player: money(playerAmount),
   };
 });
 
-/** 完成凭证：进行中/已完成/交易关闭 展示（字段接口未提供，兜底展示） */
+async function loadProfit() {
+  if (!props.row.id) return;
+  profitState.loading = true;
+  try {
+    profitState.data = await orderApi.profitDetail(props.row.id);
+    if (profitState.data && profitState.data.available === false) {
+      profitState.error = '分润未锁定，暂无可展示明细';
+    }
+  } catch (e) {
+    profitState.error = e?.message || '分润明细加载失败';
+  } finally {
+    profitState.loading = false;
+  }
+}
+
+onMounted(loadProfit);
+
+/** 完成凭证：进行中/已完成/交易关闭 展示（coverUrl/endUrl/progressUrls，接口已返回） */
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
 
 function submit() {
@@ -63,7 +87,7 @@ defineExpose({ submit });
 
 <template>
   <div class="audit-dialog">
-    <!-- 分润信息 -->
+    <!-- 分润信息（POST /api/admin/orders/{id}/profit-details，未锁定分润时 available=false） -->
     <section class="au-section">
       <h4>分润信息</h4>
       <div class="kv-grid">
@@ -71,11 +95,18 @@ defineExpose({ submit });
         <div class="kv"><span>俱乐部加价/减价</span><strong>{{ adjustText(row.clubAdjust) }}</strong></div>
         <div class="kv"><span>结算到期时间</span><strong>{{ row.settleDueAt || '—' }}</strong></div>
         <div class="kv"><span>账期天数</span><strong>{{ row.settleDaysSnapshot != null ? `${row.settleDaysSnapshot}天` : '—' }}</strong></div>
-        <div class="kv"><span>平台分润(元)*</span><strong>{{ split.platform }}</strong></div>
-        <div class="kv"><span>俱乐部分润(元)*</span><strong>{{ split.club }}元={{ money(Number(split.club) - 20) }}元+20.00元</strong></div>
-        <div class="kv"><span>打手分润(元)*</span><strong>{{ split.player }}元={{ money(Number(split.player) - 20) }}元+20.00元</strong></div>
+        <template v-if="profitState.loading">
+          <div class="kv"><span>分润明细</span><strong class="muted-text">加载中…</strong></div>
+        </template>
+        <template v-else-if="split">
+          <div class="kv"><span>平台分润(元)</span><strong>{{ split.platform }}</strong></div>
+          <div class="kv"><span>俱乐部分润(元)</span><strong>{{ split.club }}</strong></div>
+          <div class="kv"><span>打手分润(元)</span><strong>{{ split.player }}</strong></div>
+        </template>
+        <template v-else>
+          <div class="kv"><span>分润明细</span><strong class="muted-text">{{ profitState.error || '分润未锁定' }}</strong></div>
+        </template>
       </div>
-      <p class="form-tip">* 分润明细接口未提供，按原型比例（平台30%/俱乐部40%/打手30%）估算</p>
     </section>
 
     <!-- 订单日志 -->
@@ -91,7 +122,7 @@ defineExpose({ submit });
       <p v-else class="muted-text">暂无日志</p>
     </section>
 
-    <!-- 完成凭证（字段接口未提供，兜底展示） -->
+    <!-- 完成凭证（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） -->
     <section class="au-section">
       <h4>完成凭证</h4>
       <div v-if="hasProof" class="proof-grid">

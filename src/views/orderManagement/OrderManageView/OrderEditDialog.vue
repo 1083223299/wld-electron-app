@@ -13,8 +13,8 @@ import { CLIENT_OPTIONS, STATUS_CLASS } from './mockData';
  *          / groupQrUrl（企业群二维码；先 fileApi.upload 拿 url 再提交；传空串清除，不传保持原值）
  * - 所属客服（领取人）：本弹窗只读展示，不在此修改；修改入口在列表「领取人」列行内铅笔，
  *   独立弹窗调 PUT /{id}/owner（仅管理员）
- * - 仍缺（保留原型 UI，本地展示/编辑、提交不携带，待后端补充）：
- *   存单（押金单/保底截图）、完成凭证、陪玩备注、派单打手名单
+ * - 仍缺（保留原型 UI，本地展示/编辑、提交不携带）：存单（hold）、完成凭证、陪玩备注等
+ *   后端详情已返回、可回显；但维护订单信息接口（POST /{id}/maintain）不携带这些字段，故编辑不提交
  * - 打手信息来自 slots（名额列表：slotNo/playerId/source），接单/转单时间字段接口未提供
  */
 const props = defineProps({
@@ -70,7 +70,7 @@ const form = reactive({
   amount: '',
   /* 企业群二维码：maintain 支持 groupQrUrl；先 fileApi.upload 拿 url 再提交，传空串清除 */
   groupQrUrl: '',
-  /* ---- 以下字段接口未提供：本地展示/编辑，提交不携带（待后端补充） ---- */
+  /* ---- 存单字段：后端详情已返回（hold.shots 等，经 mapOrderRow 映射）；maintain 不携带，提交不提交 ---- */
   depositTarget: '1000',
   depositReason: '',
   depositFirst: '500',
@@ -147,7 +147,7 @@ function removeQr() {
   form.groupQrUrl = '';
 }
 
-/* 存单截图仍为本地 FileReader → base64 展示（接口未提供） */
+/* 存单截图：详情 hold.shots 已回显；新增图片走本地 FileReader → base64 展示（maintain 不携带） */
 function readAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -185,7 +185,7 @@ function submit() {
     if (!Number.isFinite(n) || n < 0) return show('请输入正确的订单金额', 'warning');
     amount = n;
   }
-  // 提交维护接口支持的字段；存单/凭证等字段接口未提供，提交不携带（待后端补充）
+  // 提交维护接口支持的字段；存单（hold）/凭证等后端已返回、但 maintain 接口不携带，故不提交
   emit('save', {
     gameId: Number(form.gameId),
     specId: Number(form.specId),
@@ -315,7 +315,7 @@ defineExpose({ submit });
       </div>
     </section>
 
-    <!-- 存单（仅进行中订单编辑时展示；字段接口未提供，本地编辑不提交） -->
+    <!-- 存单（仅进行中订单编辑时展示；后端详情已返回 hold 可回显，maintain 不携带、编辑不提交） -->
     <section v-if="isProgress" class="edit-section">
       <h4>存单</h4>
       <template v-if="isDelta">
@@ -357,7 +357,7 @@ defineExpose({ submit });
         <label>存单备注</label>
         <textarea v-model="form.depositRemark" class="remark-area" rows="3" maxlength="200" placeholder="非三角洲订单展示，上限200字"></textarea>
       </div>
-      <p class="form-tip">存单字段（押金单/保底截图等）接口待后端补充，当前仅本地编辑、保存不提交。</p>
+      <p class="form-tip">存单字段（hold：保底目标/各把金额/截图等）后端详情已返回可回显；维护订单信息接口不携带，编辑保存不提交。</p>
     </section>
 
     <!-- 打手信息（slots 名额列表；接单/转单时间字段接口未提供） -->

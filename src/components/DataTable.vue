@@ -30,7 +30,7 @@ const emit = defineEmits(['page-change', 'page-size-change']);
           <tr v-if="data.length === 0">
             <td :colspan="columns.length">
               <div class="empty">
-                <img src="../assets/images/not-found.svg" alt="暂无数据" />
+                <img src="../assets/images/noTransactionHistory.png" alt="暂无数据" />
                 <p>{{ emptyText }}</p>
               </div>
             </td>

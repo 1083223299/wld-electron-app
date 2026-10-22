@@ -1,17 +1,18 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, onMounted, reactive } from 'vue';
 import { useToast } from '../../../composables/useToast';
 import { STATUS_CLASS } from './mockData';
-import { slotSourceText } from '../../../api/modules/order';
+import { slotSourceText, orderApi } from '../../../api/modules/order';
 
 /**
  * 订单详情弹窗内容（查看视图，接口联调 + 原型 UI 恢复）
  * 数据来源：GET /api/admin/orders/{id}（订单详情）+ GET /api/admin/orders/{id}/logs（订单日志）
+ *   + POST /api/admin/orders/{id}/profit-details（订单分润明细）
  * - 打手信息来自 slots（名额列表：slotNo/playerId/source）
  * - 平台/俱乐部加减价为净值（减价为负）；结算到期/账期天数来自详情
- * - 分润明细接口未提供，按原型比例（平台30%/工作室40%/打手30%）估算展示
- * - 组队码/角色名/企微群二维码/存单/完成凭证 等字段接口未返回，
- *   保留原型区块并展示兜底值（待后端补充字段后自动有数据）
+ * - 分润明细：接口已提供（profit-details），未锁定（available=false）时展示提示
+ * - 存单：详情 hold 对象（form/stored/warrantyTarget/reason/rounds/shots/doneAmount/remainAmount/remark）
+ * - 完成凭证：coverUrl 首图 / endUrl 尾图 / progressUrls 进程图
  */
 const props = defineProps({
   row: { type: Object, required: true },
@@ -30,15 +31,38 @@ const adjustText = (value) => {
   return `${n > 0 ? '+' : '-'}${money(Math.abs(n))}元`;
 };
 
-/** 分润信息（接口未提供分润明细，按原型示例比例估算：平台30% / 工作室40% / 打手30%） */
-const profit = computed(() => {
-  const amount = Number(props.row.amount) || 0;
+/* ===== 分润明细（POST /api/admin/orders/{id}/profit-details） ===== */
+const profitState = reactive({ loading: false, data: null, error: '' });
+
+const profitDisplay = computed(() => {
+  const d = profitState.data;
+  if (!d || d.available === false) return null;
+  const playerAmount = (d.shares || [])
+    .filter((s) => s.ownerType === 'PLAYER')
+    .reduce((sum, s) => sum + (Number(s.amount) || 0) + (Number(s.tailAmount) || 0), 0);
   return {
-    platform: money(amount * 0.3),
-    studio: money(amount * 0.4),
-    player: money(amount * 0.3),
+    platform: money(d.platformAmount),
+    club: money(d.clubAmount),
+    player: money(playerAmount),
   };
 });
+
+async function loadProfit() {
+  if (!props.row.id) return;
+  profitState.loading = true;
+  try {
+    profitState.data = await orderApi.profitDetail(props.row.id);
+    if (profitState.data && profitState.data.available === false) {
+      profitState.error = '分润未锁定，暂无可展示明细';
+    }
+  } catch (e) {
+    profitState.error = e?.message || '分润明细加载失败';
+  } finally {
+    profitState.loading = false;
+  }
+}
+
+onMounted(loadProfit);
 
 const clientsText = computed(() =>
   props.row.clients ? String(props.row.clients).split(/[,，]/).filter(Boolean).join('、') : '—'
@@ -56,7 +80,7 @@ const players = computed(() =>
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
 const showDeposit = computed(() => isDelta.value && ['进行中', '已完成'].includes(props.row.status));
 
-/** 完成凭证：进行中/已完成/交易关闭 展示（接口未返回字段，兜底展示） */
+/** 完成凭证：进行中/已完成/交易关闭 展示（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） */
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
 
 /* ===== 复制 ===== */
@@ -115,6 +139,16 @@ async function copyText(text) {
           <strong v-if="row.roleName" class="copyable" @click="copyText(row.roleName)">{{ row.roleName }}<em>复制</em></strong>
           <strong v-else>—</strong>
         </div>
+        <div class="kv">
+          <span>主订单号</span>
+          <strong v-if="row.mainOrderNo" class="copyable" @click="copyText(row.mainOrderNo)">{{ row.mainOrderNo }}<em>复制</em></strong>
+          <strong v-else>—</strong>
+        </div>
+        <div class="kv">
+          <span>子订单</span>
+          <strong v-if="row.children && row.children.length" class="copyable" @click="copyText(row.children.map((c) => c.orderNo).join('、'))">{{ row.children.map((c) => c.orderNo).join('、') }}<em>复制</em></strong>
+          <strong v-else>—</strong>
+        </div>
         <div class="kv"><span>创建时间</span><strong>{{ row.createTime || '—' }}</strong></div>
         <div class="kv"><span>订单金额(元)</span><strong>{{ money(row.amount) }}</strong></div>
       </div>
@@ -125,23 +159,29 @@ async function copyText(text) {
       </div>
     </section>
 
-    <!-- 存单（三角洲订单展示；字段接口未提供，兜底展示） -->
+    <!-- 存单（三角洲订单展示；详情 hold 对象：form/stored/warrantyTarget/reason/rounds/shots/doneAmount/remainAmount/remark） -->
     <section v-if="showDeposit" class="detail-section">
       <h4>存单</h4>
-      <div class="kv-grid">
-        <div class="kv"><span>保底目标(W)</span><strong>{{ row.depositTarget || '1000' }}</strong></div>
-        <div class="kv"><span>存单原因</span><strong>{{ row.depositReason || '—' }}</strong></div>
-        <div class="kv"><span>第一把(W)</span><strong>{{ row.depositFirst || '500' }}</strong></div>
-        <div class="kv"><span>第二把(W)</span><strong>{{ row.depositSecond || '500' }}</strong></div>
-      </div>
-      <div class="kv-line">
-        <span>剩余保底截图</span>
-        <div v-if="row.depositImages && row.depositImages.length" class="deposit-imgs">
-          <img v-for="(img, i) in row.depositImages" :key="i" :src="img" alt="剩余保底截图" />
+      <template v-if="row.hold">
+        <div class="kv-grid">
+          <div class="kv"><span>存单表单</span><strong>{{ row.hold.form === 'REMARK' ? '存单备注' : '保底把数' }}</strong></div>
+          <div class="kv"><span>是否存单</span><strong>{{ row.hold.stored ? '是' : '否' }}</strong></div>
+          <div v-if="row.hold.form === 'WARRANTY' && row.hold.warrantyTarget != null" class="kv"><span>保底目标(W)</span><strong>{{ row.hold.warrantyTarget }}</strong></div>
+          <div v-if="row.hold.reason" class="kv"><span>存单原因</span><strong>{{ row.hold.reason }}</strong></div>
+          <div v-if="row.hold.form === 'WARRANTY' && row.hold.rounds && row.hold.rounds.length" class="kv"><span>各把金额(W)</span><strong>{{ row.hold.rounds.join('、') }}</strong></div>
+          <div v-if="row.hold.doneAmount != null" class="kv"><span>完成量(W)</span><strong>{{ row.hold.doneAmount }}</strong></div>
+          <div v-if="row.hold.remainAmount != null" class="kv"><span>剩余量(W)</span><strong>{{ row.hold.remainAmount }}</strong></div>
         </div>
-        <strong v-else class="muted-text">暂无上传（字段接口待后端补充）</strong>
-      </div>
-      <div v-if="row.depositRemark" class="kv-line"><span>存单备注</span><strong>{{ row.depositRemark }}</strong></div>
+        <div class="kv-line">
+          <span>剩余保底截图</span>
+          <div v-if="row.hold.shots && row.hold.shots.length" class="deposit-imgs">
+            <img v-for="(img, i) in row.hold.shots" :key="i" :src="img" alt="剩余保底截图" />
+          </div>
+          <strong v-else class="muted-text">暂无上传</strong>
+        </div>
+        <div v-if="row.hold.remark" class="kv-line"><span>存单备注</span><strong>{{ row.hold.remark }}</strong></div>
+      </template>
+      <p v-else class="muted-text">暂无存单数据</p>
     </section>
 
     <!-- 打手信息（slots 名额列表；接单/转单时间字段接口未提供） -->
@@ -156,7 +196,7 @@ async function copyText(text) {
       </div>
     </section>
 
-    <!-- 分润信息 -->
+    <!-- 分润信息（POST /api/admin/orders/{id}/profit-details，未锁定分润时 available=false） -->
     <section class="detail-section">
       <h4>分润信息</h4>
       <div class="kv-grid">
@@ -164,11 +204,18 @@ async function copyText(text) {
         <div class="kv"><span>俱乐部加价/减价</span><strong>{{ adjustText(row.clubAdjust) }}</strong></div>
         <div class="kv"><span>结算到期时间</span><strong>{{ row.settleDueAt || '—' }}</strong></div>
         <div class="kv"><span>账期天数</span><strong>{{ row.settleDaysSnapshot != null ? `${row.settleDaysSnapshot}天` : '—' }}</strong></div>
-        <div class="kv"><span>平台分润(元)*</span><strong>{{ profit.platform }}</strong></div>
-        <div class="kv"><span>工作室分润(元)*</span><strong>{{ profit.studio }}</strong></div>
-        <div class="kv"><span>打手分润(元)*</span><strong>{{ profit.player }}</strong></div>
+        <template v-if="profitState.loading">
+          <div class="kv"><span>分润明细</span><strong class="muted-text">加载中…</strong></div>
+        </template>
+        <template v-else-if="profitDisplay">
+          <div class="kv"><span>平台分润(元)</span><strong>{{ profitDisplay.platform }}</strong></div>
+          <div class="kv"><span>俱乐部分润(元)</span><strong>{{ profitDisplay.club }}</strong></div>
+          <div class="kv"><span>打手分润(元)</span><strong>{{ profitDisplay.player }}</strong></div>
+        </template>
+        <template v-else>
+          <div class="kv"><span>分润明细</span><strong class="muted-text">{{ profitState.error || '分润未锁定' }}</strong></div>
+        </template>
       </div>
-      <p class="form-tip">* 分润明细接口未提供，按原型比例（平台30%/工作室40%/打手30%）估算</p>
     </section>
 
     <!-- 订单日志（接口：logs） -->
@@ -184,7 +231,7 @@ async function copyText(text) {
       <p v-else class="muted-text">暂无日志</p>
     </section>
 
-    <!-- 完成凭证（字段接口未提供，兜底展示） -->
+    <!-- 完成凭证（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） -->
     <section class="detail-section">
       <h4>完成凭证</h4>
       <div v-if="hasProof" class="proof-grid">
@@ -210,7 +257,7 @@ async function copyText(text) {
         </div>
       </div>
       <div v-else class="muted-text">暂无数据</div>
-      <div v-if="row.playerRemark" class="kv-line"><span>打手备注</span><strong>{{ row.playerRemark }}</strong></div>
+      <div v-if="row.playerRemark" class="kv-line"><span>陪玩备注</span><strong>{{ row.playerRemark }}</strong></div>
       <div v-if="row.lastRejectReason" class="kv-line"><span>上次驳回原因</span><strong class="reject-text">{{ row.lastRejectReason }}</strong></div>
     </section>
 

@@ -15,8 +15,8 @@ import { request } from '../request';
 //   - 后端字段为 settleDays（结算天数）、holdForm（存单表单），页面表单已对齐；
 //   - holdForm 枚举：WARRANTY 保底把数 / REMARK 存单备注，名称含三角洲时新建默认 WARRANTY（与后端一致）；
 //   - 新增/编辑游戏时规格通过独立规格接口维护，见 createWithSpecs / updateWithSpecs；
-//   - SKU 映射相关接口（skuList / fetchSkusByProductIds / updateSku）暂无对应后端接口，
-//     暂保持本地 Mock，待后端提供接口文档后替换。
+//   - SKU 映射已接入真实接口（GET/PUT /api/admin/sku-mappings），见文件尾部；
+//     「按商品 ID 拉取 SKU」后端暂无对应接口，保留本地模拟，待后端确认。
 // =====================================================================
 
 /** 存单表单选项：WARRANTY 保底把数；REMARK 存单备注 */
@@ -130,98 +130,53 @@ export const gameApi = {
   },
 
   // =====================================================================
-  // SKU 映射（暂无后端接口，保持本地 Mock）
+  // SKU 映射：已接入真实接口
+  //   GET /api/admin/sku-mappings   列表：服务端仅支持 shopId/productId 两个 Query，无分页；
+  //                                  skuId/skuName/matched/gameId 在本地过滤后分页
+  //   PUT /api/admin/sku-mappings   保存  body: { id?, shopId, productId, skuId, gameId, specId, clients?, itemName? }
+  // 列表行字段（spec）：{ id, shopId, productId, skuId, gameId, specId, clients, itemName }
+  //   - clients 枚举 PC / MOBILE（也允许自由字符串）；
+  //   - 行内不返回 shopName，店铺名由页面用 shopId 对照渠道表反查。
   // =====================================================================
 
-  // ===== SKU 映射表（内存 mock DB） =====
-  // 一条记录 = 一个店铺下的一个 SKU，映射到某个游戏的某个规格
-  _skuDb: [
-    {
-      id: 1,
-      channel: '抖音',
-      shop: '张三店铺',
-      productId: '896377857678',
-      skuId: '896377857678',
-      skuName: '绝密航天/巴克累计2088W 双子星（店长强推美吃）',
-      client: ['手游', '端游'],
-      gameId: 46546,
-      gameName: '三角洲',
-      spec: '护航',
-      matched: true,
-    },
-    {
-      id: 2,
-      channel: '抖音',
-      shop: '张三店铺',
-      productId: '896377857679',
-      skuId: '896377857679',
-      skuName: '和平精英 代练 星钻上王者',
-      client: ['手游'],
-      gameId: 46547,
-      gameName: '和平精英',
-      spec: '单排上分',
-      matched: true,
-    },
-    {
-      id: 3,
-      channel: '抖音',
-      shop: '张三店铺',
-      productId: '896377857680',
-      skuId: '896377857680',
-      skuName: '王者荣耀 陪玩 大神双排',
-      client: ['手游'],
-      gameId: null,
-      gameName: '',
-      spec: '',
-      matched: false,
-    },
-    {
-      id: 4,
-      channel: '抖音',
-      shop: '张三店铺',
-      productId: '896377857681',
-      skuId: '896377857681',
-      skuName: '英雄联盟 排位代练',
-      client: ['端游'],
-      gameId: null,
-      gameName: '',
-      spec: '',
-      matched: false,
-    },
-  ],
-
-  _skuSeq: 5,
+  /** 客户端枚举：后端 PC/MOBILE → 页面中文 */
+  _CLIENT_EN: { PC: '端游', MOBILE: '手游' },
+  /** 页面中文 → 后端枚举（多选时逗号分隔） */
+  _CLIENT_CN: { 端游: 'PC', 手游: 'MOBILE' },
 
   /**
-   * SKU 列表
-   * @param {{page?:number,pageSize?:number,productId?:string,skuId?:string,skuName?:string,matched?:string,gameId?:number}} params
+   * SKU 映射列表（GET /api/admin/sku-mappings）
+   * 接口仅按 shopId/productId 筛选且不分页；skuId/skuName/matched/gameId 在本地过滤后分页
+   * @param {{page?:number,pageSize?:number,shopId?:string,productId?:string,skuId?:string,skuName?:string,matched?:string,gameId?:number}} params
+   * @returns {Promise<{total:number,list:Array}>}
+   *   list 项：{id, shopId, productId, skuId, gameId, specId, clients, itemName}
    */
-  skuList: (params = {}) =>
-    request.mock(null, 200).then(() => {
-      const {
-        page = 1,
-        pageSize = 10,
-        productId = '',
-        skuId = '',
-        skuName = '',
-        matched = '',
-        gameId = '',
-      } = params;
-      let list = gameApi._skuDb;
-      if (gameId) list = list.filter((s) => s.gameId === Number(gameId));
-      if (productId) list = list.filter((s) => s.productId === String(productId).trim());
-      if (skuId) list = list.filter((s) => s.skuId === String(skuId).trim());
-      if (skuName) list = list.filter((s) => s.skuName.includes(String(skuName).trim()));
-      if (matched === 'matched') list = list.filter((s) => s.matched);
-      if (matched === 'unmatched') list = list.filter((s) => !s.matched);
-      return {
-        total: list.length,
-        list: list.slice((page - 1) * pageSize, page * pageSize),
-      };
-    }),
+  skuList: async (params = {}) => {
+    const { page = 1, pageSize = 10, shopId = '', productId = '', skuId = '', skuName = '', matched = '', gameId = '' } = params;
+    const qs = new URLSearchParams();
+    if (shopId) qs.set('shopId', String(shopId).trim());
+    if (productId) qs.set('productId', String(productId).trim());
+    const query = qs.toString();
+    const all = toArray(await request.get(`/api/admin/sku-mappings${query ? `?${query}` : ''}`));
+    const kwSkuId = String(skuId || '').trim();
+    const kwSkuName = String(skuName || '').trim();
+    const gid = gameId ? Number(gameId) : '';
+    let list = all;
+    if (kwSkuId) list = list.filter((s) => String(s.skuId || '') === kwSkuId); // SKUID 完全匹配
+    if (kwSkuName) list = list.filter((s) => String(s.itemName || '').includes(kwSkuName)); // SKU名称 模糊匹配
+    if (gid !== '') list = list.filter((s) => Number(s.gameId) === gid);
+    if (matched === 'matched') list = list.filter((s) => s.gameId && s.specId);
+    if (matched === 'unmatched') list = list.filter((s) => !s.gameId || !s.specId);
+    return {
+      total: list.length,
+      list: list.slice((page - 1) * pageSize, page * pageSize),
+    };
+  },
 
   /**
-   * 由商品 ID 批量拉取店铺下的 SKU（人工添加商品时用）
+   * 由商品 ID 批量拉取店铺下的 SKU（添加商品时用）
+   * 后端暂未提供按商品 ID 拉取 SKU 的管理端接口（文档仅有 sku-mappings 列表/保存），
+   * 暂保留本地模拟供 UI 走通，待后端确认对应接口后替换。
    * @param {{productIds:string}} productIds 多个商品ID用逗号分隔
    */
   fetchSkusByProductIds: ({ productIds = '' } = {}) =>
@@ -235,39 +190,22 @@ export const gameApi = {
       const result = [];
       ids.forEach((pid, idx) => {
         result.push({
-          id: gameApi._skuSeq++,
-          channel: '抖音',
-          shop: '张三店铺',
+          id: Date.now() + idx,
+          shopId: '',
           productId: pid,
           skuId: `${pid}00${idx + 1}`,
-          skuName: `店铺商品 ${pid} - 规格SKU`,
-          client: [],
+          itemName: `店铺商品 ${pid} - 规格SKU`,
+          clients: '',
           gameId: null,
-          gameName: '',
-          spec: '',
-          matched: false,
+          specId: null,
         });
       });
-      // 写入 DB
-      gameApi._skuDb.push(...result);
       return result;
     }),
 
   /**
-   * 编辑 SKU 映射
-   * @param {{id:number,client:string[],gameId:number,gameName:string,spec:string}} data
+   * 保存 SKU 映射（PUT /api/admin/sku-mappings）
+   * @param {{id?:number, shopId:string, productId:string, skuId:string, gameId:number, specId:number, clients?:string, itemName?:string}} data
    */
-  updateSku: (data) =>
-    request.mock(null, 200).then(() => {
-      const item = gameApi._skuDb.find((s) => s.id === Number(data.id));
-      if (!item) throw new Error('SKU 不存在');
-      Object.assign(item, {
-        client: data.client || [],
-        gameId: data.gameId || null,
-        gameName: data.gameName || '',
-        spec: data.spec || '',
-        matched: !!(data.gameId && data.spec),
-      });
-      return item;
-    }),
+  updateSku: (data) => request.put('/api/admin/sku-mappings', data),
 };

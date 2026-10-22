@@ -16,7 +16,6 @@ import { applyWatermark, removeWatermark } from './utils/watermark';
 const route = useRoute();
 const router = useRouter();
 const isLoginPage = computed(() => route.name === 'Login');
-const title = computed(() => route.meta?.title || '首页');
 
 const notifyStore = useNotifyStore();
 const prefs = usePreferencesStore();
@@ -82,7 +81,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-frame">
-    <AppTopbar :title="title" />
+    <AppTopbar />
 
     <div class="app-root">
       <router-view />
