@@ -7,6 +7,7 @@ import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
 import { gameApi } from '../../../api/modules/game';
+import { fileApi } from '../../../api/modules/file';
 import SkuMapping from './SkuMapping.vue';
 
 const { confirm } = useConfirm();
@@ -53,8 +54,10 @@ const loading = ref(false);
 const columns = [
   { key: 'id', title: '游戏ID' },
   { key: 'name', title: '游戏名称' },
+  { key: 'logo', title: '游戏logo' },
   { key: 'settleDays', title: '账期天数' },
   { key: 'createdAt', title: '创建时间' },
+  { key: 'customOrder', title: '用户自定义下单开关' },
   { key: 'op', title: '操作' },
 ];
 
@@ -113,15 +116,24 @@ const editForm = reactive({
   name: '',
   settleDays: '',
   specs: [''],
+  logo: '', // 游戏logo（必填，图片 url）【字段名待后端确认】
+  customOrderEnabled: true, // 用户自定义下单开关【字段名待后端确认】
 });
 // 编辑时记录的原始规格（含 id），用于识别表单中被删除的行 → 显式调 DELETE 删除
 const originalSpecs = ref([]);
+const logoUploading = ref(false);
 
-function openCreate() {
-  editingId.value = null;
+function resetEditForm() {
   editForm.name = '';
   editForm.settleDays = '';
   editForm.specs = [''];
+  editForm.logo = '';
+  editForm.customOrderEnabled = true;
+}
+
+function openCreate() {
+  editingId.value = null;
+  resetEditForm();
   originalSpecs.value = [];
   editVisible.value = true;
 }
@@ -131,6 +143,9 @@ async function openEdit(row) {
   editForm.name = row.name || '';
   editForm.settleDays = row.settleDays ?? '';
   editForm.specs = [''];
+  // 【字段名待后端确认】兼容 logo/logoUrl/gameLogo 多种可能
+  editForm.logo = row.logo || row.logoUrl || row.gameLogo || '';
+  editForm.customOrderEnabled = row.customOrderEnabled ?? row.allowCustomOrder ?? true;
   editVisible.value = true;
   try {
     // 列表接口不返回规格，编辑时单独拉取当前规格（含 id，删除规格时需要）
@@ -153,6 +168,36 @@ function removeSpec(idx) {
     return;
   }
   editForm.specs.splice(idx, 1);
+}
+
+/* ===== 游戏logo 上传（单图，必填） ===== */
+function openLogoPicker() {
+  document.getElementById('game-logo-input')?.click();
+}
+
+async function handleLogoFile(event) {
+  const picked = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (!picked.length) return;
+  const file = picked[0];
+  if (!/^image\//.test(file.type) && !/\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i.test(file.name)) {
+    show('请上传图片格式的logo', 'warning');
+    return;
+  }
+  logoUploading.value = true;
+  try {
+    const res = await fileApi.upload(file);
+    editForm.logo = res.url;
+    show('logo已上传', 'success');
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  } finally {
+    logoUploading.value = false;
+  }
+}
+
+function removeLogo() {
+  editForm.logo = '';
 }
 
 async function submitEdit() {
@@ -184,11 +229,18 @@ async function submitEdit() {
     show('请填写账期天数', 'warning');
     return;
   }
+  // 游戏logo：必填（原型批注1：加游戏logo字段，必填）
+  if (!editForm.logo) {
+    show('请上传游戏logo', 'warning');
+    return;
+  }
 
   const payload = {
     name: editForm.name.trim(),
     settleDays,
     specs,
+    logo: editForm.logo,
+    customOrderEnabled: editForm.customOrderEnabled ? 1 : 0,
   };
 
   try {
@@ -282,6 +334,25 @@ onMounted(fetchList);
         {{ row.settleDays != null ? `${row.settleDays}天` : '-' }}
       </template>
 
+      <template #cell-logo="{ row }">
+        <img
+          v-if="row.logo || row.logoUrl || row.gameLogo"
+          class="game-logo-thumb"
+          :src="row.logo || row.logoUrl || row.gameLogo"
+          alt="游戏logo"
+        />
+        <span v-else class="muted-text">—</span>
+      </template>
+
+      <template #cell-customOrder="{ row }">
+        <span
+          class="custom-order-switch"
+          :class="{ on: (row.customOrderEnabled ?? row.allowCustomOrder ?? 1) === 1 || row.customOrderEnabled === true }"
+        >
+          <span class="dot" />
+        </span>
+      </template>
+
       <template #cell-op="{ row }">
         <div class="action-group">
           <button class="link-btn" @click="openEdit(row)">编辑</button>
@@ -308,6 +379,33 @@ onMounted(fetchList);
                 placeholder="请输入天数"
               />
               <span class="unit">天</span>
+            </div>
+          </div>
+          <div class="form-row form-row--logo">
+            <label class="required">游戏logo</label>
+            <div class="logo-uploader">
+              <input id="game-logo-input" type="file" accept="image/*" hidden @change="handleLogoFile" />
+              <div v-if="editForm.logo" class="logo-preview">
+                <img :src="editForm.logo" alt="游戏logo" />
+                <button type="button" class="logo-remove" title="移除logo" @click="removeLogo">×</button>
+              </div>
+              <button v-else type="button" class="logo-pick" :disabled="logoUploading" @click="openLogoPicker">
+                {{ logoUploading ? '上传中…' : '点击上传logo' }}
+              </button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>用户自定义下单开关</label>
+            <div class="custom-order-row">
+              <button
+                type="button"
+                class="custom-order-switch lg"
+                :class="{ on: editForm.customOrderEnabled }"
+                @click="editForm.customOrderEnabled = !editForm.customOrderEnabled"
+              >
+                <span class="dot" />
+              </button>
+              <span class="custom-order-hint">{{ editForm.customOrderEnabled ? '开启（允许用户自定义下单）' : '关闭（用户点击自定义下单将提示：游戏内容维护中，敬请期待）' }}</span>
             </div>
           </div>
         </div>
@@ -531,6 +629,139 @@ onMounted(fetchList);
   filter: brightness(1.06);
   box-shadow: 0 16px 30px var(--primary-border-strong);
 }
+
+/* 游戏logo 缩略图（列表） */
+.game-logo-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #f2f4f7;
+}
+
+/* 用户自定义下单开关（列表展示，编辑在弹窗内操作） */
+.custom-order-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: #d0d5dd;
+  transition: background 0.18s ease;
+  vertical-align: middle;
+}
+
+.custom-order-switch .dot {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: left 0.18s ease;
+}
+
+.custom-order-switch.on {
+  background: var(--primary);
+}
+
+.custom-order-switch.on .dot {
+  left: 21px;
+}
+
+.custom-order-switch.lg {
+  width: 48px;
+  height: 26px;
+  cursor: pointer;
+}
+
+.custom-order-switch.lg .dot {
+  width: 20px;
+  height: 20px;
+}
+
+.custom-order-switch.lg.on .dot {
+  left: 25px;
+}
+
+.custom-order-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custom-order-hint {
+  font-size: 12px;
+  color: #8a93a6;
+}
+
+/* logo 上传 */
+.form-row--logo {
+  grid-column: 1 / -1;
+}
+
+.logo-uploader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-preview {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.logo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.logo-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.logo-pick {
+  width: 64px;
+  height: 64px;
+  border: 1px dashed #c9d2e3;
+  border-radius: 12px;
+  background: #fbfcfe;
+  color: #8a93a6;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.logo-pick:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.logo-pick:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.muted-text { color: #98a2b3; }
 </style>
 
 <!-- 弹窗外壳美化 -->

@@ -13,10 +13,12 @@ import {
   STATUS_OPTIONS,
   AUDIT_OPTIONS,
   TYPE_OPTIONS,
+  ORDER_MODE_OPTIONS,
   statusText,
   auditText,
   attributeText,
   typeText,
+  modeText,
 } from '../../../api/modules/order';
 import { gameApi } from '../../../api/modules/game';
 import { channelApi } from '../../../api/modules/channel';
@@ -91,6 +93,7 @@ const filter = reactive({
   auditStatus: '',
   attribute: '', // 主订单/子订单（新 OpenAPI 已支持 attribute=MAIN/SUB）
   orderType: '',
+  orderMode: '', // 下单方式（常规下单/用户自定义下单；枚举待后端确认）
   claimer: '', // 领取人姓名/企微（新 OpenAPI 已支持 ownerName 模糊，仅 scope=ALL 有效）
   ownerId: '', // 领取人账号ID（接口参数，仅 scope=ALL 有效）
   clientType: '', // 客户端（新 OpenAPI 已支持 clients=PC/MOBILE，原型中文做映射）
@@ -121,6 +124,10 @@ const searchFields = computed(() => [
     prop: 'orderType', label: '订单类型', type: 'select', placeholder: '全部', span: 4,
     options: [{ label: '全部', value: '' }, ...TYPE_OPTIONS],
   },
+  {
+    prop: 'orderMode', label: '下单方式', type: 'select', placeholder: '全部', span: 4,
+    options: [{ label: '全部', value: '' }, ...ORDER_MODE_OPTIONS],
+  },
   { prop: 'claimer', label: '领取人', type: 'input', placeholder: '请输入领取人（企微名/客服名）', span: 4 },
   {
     prop: 'clientType', label: '客户端', type: 'select', placeholder: '全部', span: 4,
@@ -146,7 +153,7 @@ const searchFields = computed(() => [
 ]);
 
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['orderNo', 'thirdOrderNo', 'channel', 'status', 'auditStatus', 'attribute', 'orderType', 'claimer', 'ownerId', 'clientType', 'tag', 'createTime'],
+  filterKeys: ['orderNo', 'thirdOrderNo', 'channel', 'status', 'auditStatus', 'attribute', 'orderType', 'orderMode', 'claimer', 'ownerId', 'clientType', 'tag', 'createTime'],
 });
 restoreFilter(filter);
 
@@ -272,6 +279,9 @@ function mapOrderRow(item = {}) {
     createTime: item.createdAt || '',
     orderType: typeText(item.orderType),
     orderTypeCode: item.orderType,
+    /* 下单方式（常规下单/用户自定义下单；字段名待后端确认，兼容 orderMode/placeType/customOrder） */
+    orderModeCode: item.orderMode || item.placeType || (item.customOrder ? 'CUSTOM' : ''),
+    orderMode: (item.orderMode || item.placeType) ? modeText(item.orderMode || item.placeType) : (item.customOrder ? '用户自定义下单' : ''),
     /* ---- 接口已返回（后端已补齐） ---- */
     roleName: item.roleName || '',
     /* teamCode（组队码）：列表/详情已返回 */
@@ -337,6 +347,7 @@ function buildParams() {
     status: filter.status,
     auditStatus: filter.auditStatus,
     orderType: filter.orderType,
+    orderMode: filter.orderMode,
     from: fmtDateTime(fromDay),
     to: fmtDateTime(toDay),
   };

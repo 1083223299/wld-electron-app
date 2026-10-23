@@ -54,6 +54,13 @@ const routes = [
             meta: { title: '打手列表', roles: ['admin', 'service', 'audit'] },
           },
           {
+            // 打手入驻审核：原型中为打手列表内的 tab，按要求拆分为用户管理下的独立菜单（不与打手列表合并）
+            path: 'player-audit',
+            name: 'PlayerAudit',
+            component: () => import('../views/userManagement/PlayerAuditListView/index.vue'),
+            meta: { title: '打手审核', roles: ['admin', 'audit'] },
+          },
+          {
             path: 'club-list',
             name: 'ClubList',
             component: () => import('../views/userManagement/ClubListView/index.vue'),
@@ -136,6 +143,18 @@ const routes = [
             name: 'OrderConfig',
             component: () => import('../views/configurationManagement/OrderConfigView/index.vue'),
             meta: { title: '卡单时长配置', roles: ['admin'] },
+          },
+          {
+            path: 'profit-config',
+            name: 'ProfitConfig',
+            component: () => import('../views/configurationManagement/ProfitConfigView/index.vue'),
+            meta: { title: '分润配置', roles: ['admin'] },
+          },
+          {
+            path: 'spec-price',
+            name: 'SpecPriceConfig',
+            component: () => import('../views/configurationManagement/SpecPriceConfigView/index.vue'),
+            meta: { title: '自定义规格价格配置', roles: ['admin'] },
           },
         ],
       },

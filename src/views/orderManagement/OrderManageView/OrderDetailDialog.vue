@@ -95,6 +95,10 @@ const players = computed(() => {
 
 /** 存单：三角洲订单且进行中 展示（原型：存单信息仅进行中订单下展示） */
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
+/** 用户自定义下单：详情不展示游戏规格（原型：自定义下单时详情没有游戏规格字段） */
+const isCustomOrder = computed(
+  () => props.row.orderModeCode === 'CUSTOM' || props.row.orderMode === '用户自定义下单',
+);
 const showDeposit = computed(() => isDelta.value && props.row.status === '进行中');
 
 /** 完成凭证：进行中/已完成/交易关闭 展示（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） */
@@ -138,8 +142,10 @@ async function copyText(text) {
         <div class="kv"><span>渠道</span><strong>{{ row.channel || '—' }}</strong></div>
         <div class="kv"><span>游戏名称</span><strong>{{ row.gameName || '—' }}</strong></div>
         <div class="kv"><span>购买项目</span><strong>{{ row.product || '—' }}</strong></div>
-        <div class="kv"><span>游戏规格</span><strong>{{ row.spec || '—' }}</strong></div>
+        <!-- 原型：自定义下单时详情没有游戏规格字段 -->
+        <div v-if="!isCustomOrder" class="kv"><span>游戏规格</span><strong>{{ row.spec || '—' }}</strong></div>
         <div class="kv"><span>订单类型</span><strong>{{ row.orderType || '—' }}</strong></div>
+        <div class="kv"><span>下单方式</span><strong>{{ row.orderMode || '—' }}</strong></div>
         <div class="kv"><span>客户端</span><strong>{{ clientsText }}</strong></div>
         <div class="kv"><span>打手人数</span><strong>{{ row.playerCount != null ? row.playerCount : '—' }}</strong></div>
         <div class="kv">

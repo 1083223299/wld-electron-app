@@ -52,9 +52,17 @@ export const ORDER_TYPE = {
   SPECIAL: '特惠单',
 };
 
+/**
+ * 下单方式（原型：订单列表新增筛选项「下单方式」，常规下单 / 用户自定义下单）
+ * 【枚举值待后端确认】先按 NORMAL=常规下单 / CUSTOM=用户自定义下单 拟定，联调以后端为准
+ */
+export const ORDER_MODE = {
+  NORMAL: '常规下单',
+  CUSTOM: '用户自定义下单',
+};
+
 /** 渠道编码 → 渠道名（人工新增订单示例：XHS / PRIVATE） */
-export const CHANNEL_CODES = {
-  DOUYIN: '抖音',
+export const CHANNEL_CODES = {  DOUYIN: '抖音',
   XHS: '小红书',
   PRIVATE: '人工',
 };
@@ -83,6 +91,7 @@ export const statusText = (code) => ORDER_STATUS[code] || code || '—';
 export const auditText = (code) => AUDIT_STATUS[code] || code || '—';
 export const attributeText = (code) => ATTRIBUTE[code] || code || '—';
 export const typeText = (code) => ORDER_TYPE[code] || code || '—';
+export const modeText = (code) => ORDER_MODE[code] || code || '—';
 export const channelText = (code) => CHANNEL_CODES[code] || code || '—';
 export const dispatchTypeText = (code) => DISPATCH_TYPE[code] || code || '—';
 export const transferTypeText = (code) => TRANSFER_TYPE[code] || code || '—';
@@ -108,6 +117,9 @@ export const TYPE_OPTIONS = Object.entries(ORDER_TYPE)
   .filter(([value]) => value !== 'SPECIAL')
   .map(([value, label]) => ({ label, value }));
 export const CHANNEL_OPTIONS = Object.entries(CHANNEL_CODES).map(([value, label]) => ({ label, value }));
+
+// 下单方式选项（常规下单 / 用户自定义下单；枚举待后端确认）
+export const ORDER_MODE_OPTIONS = Object.entries(ORDER_MODE).map(([value, label]) => ({ label, value }));
 
 /* ================= 查询参数组装（空值自动剔除，数组 join 逗号） ================= */
 

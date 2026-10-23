@@ -100,13 +100,22 @@ export const gameApi = {
     return all;
   },
 
-  /** 新增游戏（规格内联提交，specs 元素可为字符串或 { name }）@param {{name:string, settleDays:number, specs:Array<string|{name:string}>}} data */
-  create: ({ name, settleDays, specs }) =>
-    request.post('/api/admin/games', { name, settleDays, specs: normalizeSpecs(specs) }),
+  /**
+   * 新增游戏（规格内联提交，specs 元素可为字符串或 { name }）
+   * 额外透传原型新增字段：logo（游戏logo）、customOrderEnabled（用户自定义下单开关，字段名待后端确认）
+   * @param {{name:string, settleDays:number, specs:Array<string|{name:string}>, logo?:string, customOrderEnabled?:number|boolean}} data
+   */
+  create: ({ name, settleDays, specs, ...extra }) =>
+    request.post('/api/admin/games', { name, settleDays, specs: normalizeSpecs(specs), ...extra }),
 
-  /** 编辑游戏（规格内联提交，与新增一致）@param {number} id @param {{name:string, settleDays:number, specs:Array<string|{name:string}>}} data */
-  update: (id, { name, settleDays, specs }) =>
-    request.put(`/api/admin/games/${id}`, { name, settleDays, specs: normalizeSpecs(specs) }),
+  /**
+   * 编辑游戏（规格内联提交，与新增一致）
+   * 额外透传 logo / customOrderEnabled（字段名待后端确认）
+   * @param {number} id
+   * @param {{name:string, settleDays:number, specs:Array<string|{name:string}>, logo?:string, customOrderEnabled?:number|boolean}} data
+   */
+  update: (id, { name, settleDays, specs, ...extra }) =>
+    request.put(`/api/admin/games/${id}`, { name, settleDays, specs: normalizeSpecs(specs), ...extra }),
 
   /** 删除游戏（软删） @param {number} id */
   remove: (id) => request.del(`/api/admin/games/${id}`),
