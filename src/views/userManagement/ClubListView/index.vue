@@ -8,6 +8,7 @@ import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
 import { clubApi } from '../../../api/modules/club';
 import { gameApi } from '../../../api/modules/game';
+import { fileApi } from '../../../api/modules/file';
 import { useUserStore } from '../../../stores/user';
 
 const { confirm } = useConfirm();
@@ -39,6 +40,7 @@ const loading = ref(false);
 const allColumns = [
   { key: 'id', title: '俱乐部ID' },
   { key: 'name', title: '俱乐部名称' },
+  { key: 'phone', title: '俱乐部手机号' },
   { key: 'license', title: '营业执照' },
   { key: 'incomeBalance', title: '收益余额(元)' },
   { key: 'depositBalance', title: '押金余额(元)' },
@@ -157,24 +159,43 @@ const editForm = reactive({
   name: '',
   phone: '',
   password: '',
-  publicGrab: 0,
+  licenseUrl: '', // 营业执照图片地址（后端 C1 开放后生效）
+  files: [], // 文件（上限5组文件）[{url,name}]
+  remark: '', // 备注（后端 C1 开放后生效）
 });
 
 function openAdd() {
   editingId.value = null;
-  Object.assign(editForm, { name: '', phone: '', password: '', publicGrab: 0 });
+  Object.assign(editForm, { name: '', phone: '', password: '', licenseUrl: '', files: [], remark: '' });
+  specRowList.value = [{ gameId: null, mode: 'all', specId: null }];
   editModalVisible.value = true;
+  loadSpecCatalog().catch(() => {});
 }
 
-function openEdit(row) {
+async function openEdit(row) {
   editingId.value = row.id;
   Object.assign(editForm, {
     name: row.name || '',
     phone: row.phone || '',
     password: '',
-    publicGrab: Number(row.publicGrab) || 0,
+    licenseUrl: row.licenseUrl || '',
+    files: Array.isArray(row.files) ? row.files.map((f) => (typeof f === 'string' ? { url: f, name: f } : { url: f.url, name: f.name || f.url })) : [],
+    remark: row.remark || '',
   });
+  specRowList.value = [];
   editModalVisible.value = true;
+  try {
+    await loadSpecCatalog();
+    const list = normalizeSpecList(await clubApi.getSpecs(Number(row.id)));
+    specRowList.value = list.map((cfg) =>
+      cfg.all
+        ? { gameId: Number(cfg.gameId), mode: 'all', specId: null }
+        : { gameId: Number(cfg.gameId), mode: 'single', specId: Number(cfg.specId) },
+    );
+    if (!specRowList.value.length) specRowList.value = [{ gameId: null, mode: 'all', specId: null }];
+  } catch {
+    /* 错误由 request.js 统一提示 */
+  }
 }
 
 async function submitEdit() {
@@ -186,17 +207,25 @@ async function submitEdit() {
     show('请输入手机号', 'warning');
     return;
   }
-  if (!editingId.value && !editForm.password) {
-    show('请输入登录密码', 'warning');
+  const hasSpec = specRowList.value.some((r) => r.gameId);
+  if (!hasSpec) {
+    show('请选择可接单规格', 'warning');
     return;
   }
   const payload = {
     name: editForm.name.trim(),
     phone: editForm.phone.trim(),
-    publicGrab: Number(editForm.publicGrab),
   };
   // 编辑时密码留空表示不修改
   if (editForm.password) payload.password = editForm.password;
+  // 后端 C1 开放后生效：营业执照 / 文件 / 备注先随表单提交，暂未开放的字段由后端忽略
+  if (editForm.licenseUrl) payload.licenseUrl = editForm.licenseUrl;
+  payload.remark = editForm.remark || '';
+  payload.files = editForm.files.map((f) => ({ url: f.url, name: f.name }));
+  // 可接单规格：全选游戏传 {gameId,all:true}，单规格传 {gameId,specId}
+  payload.specs = specRowList.value
+    .filter((r) => r.gameId)
+    .map((r) => (r.mode === 'all' ? { gameId: r.gameId, all: true } : { gameId: r.gameId, specId: r.specId }));
   try {
     if (editingId.value) {
       await clubApi.update(editingId.value, payload);
@@ -210,6 +239,111 @@ async function submitEdit() {
   } catch (e) {
     // 错误提示由 request.js 统一弹出
   }
+}
+
+// ============ 新增 / 编辑弹窗：营业执照与文件上传 ============
+const maxEditFiles = 5;
+const licenseUploading = ref(false);
+const editFileUploading = ref(false);
+
+function openLicensePicker() {
+  document.getElementById('club-license-input')?.click();
+}
+
+async function handleLicense(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  licenseUploading.value = true;
+  try {
+    const res = await fileApi.upload(file);
+    editForm.licenseUrl = res.url;
+    show('营业执照已上传', 'success');
+  } catch {
+    /* 统一提示 */
+  } finally {
+    licenseUploading.value = false;
+  }
+}
+
+function removeLicense() {
+  editForm.licenseUrl = '';
+}
+
+function openEditFilePicker() {
+  document.getElementById('club-edit-file-input')?.click();
+}
+
+async function handleEditFiles(event) {
+  const picked = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (!picked.length) return;
+  const room = maxEditFiles - editForm.files.length;
+  if (room <= 0) return show(`最多上传 ${maxEditFiles} 个文件`, 'warning');
+  editFileUploading.value = true;
+  try {
+    for (const file of picked.slice(0, room)) {
+      const res = await fileApi.upload(file);
+      editForm.files.push({ url: res.url, name: res.name || res.fileName || res.originalFilename || file.name });
+    }
+    show('文件已上传', 'success');
+  } catch {
+    /* 统一提示 */
+  } finally {
+    editFileUploading.value = false;
+  }
+}
+
+function removeEditFile(index) {
+  editForm.files.splice(index, 1);
+}
+
+function isImageFile(url = '') {
+  return /\.(png|jpe?g|gif|webp|bmp|svg|jfif)(\?|#|$)/i.test(url);
+}
+
+/** 综合 URL 与文件名后缀判断是否图片（CDN 地址常不带后缀） */
+function fileIsImage(item) {
+  return isImageFile(item?.url) || isImageFile(item?.name);
+}
+
+function licenseImages(row) {
+  const raw = row.licenseUrl || row.licenses;
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [raw];
+}
+
+// ============ 新增 / 编辑弹窗：表单内可接单规格（行式：游戏下拉 + 规格下拉 + 增减行） ============
+const specRowList = ref([{ gameId: null, mode: 'all', specId: null }]);
+
+function specOptionsOf(gameId) {
+  const game = specCatalog.value.find((g) => g.gameId === gameId);
+  return game ? game.specs : [];
+}
+
+function onSpecGameChange(row) {
+  row.mode = 'all';
+  row.specId = null;
+}
+
+function onSpecSelect(row, event) {
+  const value = event.target.value;
+  if (value === 'all') {
+    row.mode = 'all';
+    row.specId = null;
+  } else {
+    row.mode = 'single';
+    row.specId = Number(value);
+  }
+}
+
+function addSpecRow() {
+  specRowList.value.push({ gameId: null, mode: 'all', specId: null });
+}
+
+function removeSpecRow(index) {
+  specRowList.value.splice(index, 1);
+  if (!specRowList.value.length) specRowList.value.push({ gameId: null, mode: 'all', specId: null });
 }
 
 // ============ 营业执照预览 ============
@@ -470,7 +604,11 @@ const assetForm = reactive({
   operation: '充值', // 充值 / 扣减 / 余额抵扣
   amount: '',
   reason: '',
+  files: [], // 凭证文件 [{ url, name }]，最多 5 个
 });
+
+const assetUploading = ref(false);
+const maxAssetFiles = 5;
 
 const WALLET_TYPE_MAP = { 收益: 'INCOME', 押金: 'DEPOSIT' };
 const WALLET_ACTION_MAP = { 充值: 'CREDIT', 扣减: 'DEDUCT', 余额抵扣: 'OFFSET' };
@@ -494,6 +632,12 @@ const getAssetPlaceholder = computed(() => {
   if (assetForm.operation === '充值') return '请输入充值金额';
   if (assetForm.operation === '扣减') return '请输入扣减金额';
   return '请输入抵扣金额';
+});
+
+const getAssetReasonLabel = computed(() => {
+  if (assetForm.operation === '充值') return '充值原因（会在C端展示）';
+  if (assetForm.operation === '扣减') return '扣减原因（会在C端展示）';
+  return '抵扣原因（会在C端展示）';
 });
 
 // 列表接口返回收益/押金余额：incomeBalance / depositBalance（单位元）
@@ -522,6 +666,34 @@ function handleAssetTypeChange(type) {
   assetForm.amount = '';
 }
 
+function openAssetFilePicker() {
+  document.getElementById('club-asset-upload-input')?.click();
+}
+
+async function handleAssetFiles(event) {
+  const picked = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (!picked.length) return;
+  const room = maxAssetFiles - assetForm.files.length;
+  if (room <= 0) return show(`最多上传 ${maxAssetFiles} 个文件`, 'warning');
+  assetUploading.value = true;
+  try {
+    for (const file of picked.slice(0, room)) {
+      const res = await fileApi.upload(file);
+      assetForm.files.push({ url: res.url, name: res.name || res.fileName || res.originalFilename || file.name });
+    }
+    show('文件已上传', 'success');
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  } finally {
+    assetUploading.value = false;
+  }
+}
+
+function removeAssetFile(index) {
+  assetForm.files.splice(index, 1);
+}
+
 function openAsset(row) {
   currentRow.value = row;
   Object.assign(assetForm, {
@@ -529,6 +701,7 @@ function openAsset(row) {
     operation: '充值',
     amount: '',
     reason: '',
+    files: [],
   });
   assetModalVisible.value = true;
 }
@@ -558,6 +731,7 @@ async function submitAsset() {
       action: WALLET_ACTION_MAP[assetForm.operation],
       amount,
       reason: assetForm.reason.trim(),
+      files: assetForm.files.map((f) => ({ url: f.url, name: f.name })),
     });
     assetModalVisible.value = false;
     show('资产已更新', 'success');
@@ -580,7 +754,8 @@ const specDialogTitle = computed(() => `可接单规格 - ${currentRow.value?.na
 
 async function loadSpecCatalog() {
   if (specCatalog.value.length) return;
-  const games = await gameApi.list();
+  // 游戏列表接口已改服务端分页（返回分页对象），规格目录需取全量 → 用 listAll()
+  const games = await gameApi.listAll();
   const catalog = await Promise.all(
     (games || []).map(async (game) => {
       let specs = [];
@@ -707,15 +882,19 @@ onMounted(fetchList);
       </template>
 
       <template #cell-license="{ row }">
-        <button
-          v-if="row.licenseUrl"
-          class="license-link"
-          type="button"
-          title="点击查看大图"
-          @click="openLicenseViewer(row)"
-        >
-          查看
-        </button>
+        <div v-if="licenseImages(row).length" class="license-thumb-row">
+          <el-image
+            v-for="(url, i) in licenseImages(row)"
+            :key="`${url}-${i}`"
+            class="license-thumb"
+            :src="url"
+            fit="cover"
+            :preview-src-list="licenseImages(row)"
+            :initial-index="i"
+            preview-teleported
+            title="点击放大"
+          />
+        </div>
         <span v-else class="muted-text">暂无</span>
       </template>
 
@@ -808,7 +987,7 @@ onMounted(fetchList);
             <span>平台分润</span>
             <strong>{{ platformRateText }}</strong>
           </div>
-          <div class="profit-tip">该比例统一应用于该俱乐部的全部授权规格；打手分润按 0 保存。</div>
+          <!-- <div class="profit-tip">该比例统一应用于该俱乐部的全部授权规格；打手分润按 0 保存。</div> -->
         </template>
 
         <!-- 固定分润：按规格填写金额 -->
@@ -847,9 +1026,9 @@ onMounted(fetchList);
             </DataTable>
           </template>
 
-          <div class="profit-tip">
+          <!-- <div class="profit-tip">
             此处仅展示该俱乐部所拥有的游戏及规格数据，优先展示未配置金额的数据，支持按关键词搜索；金额仅支持输入 0 及正数，最多保留两位小数。
-          </div>
+          </div> -->
         </template>
       </div>
       <template #footer>
@@ -864,7 +1043,13 @@ onMounted(fetchList);
     <AppModal v-model="licenseModalVisible" title="营业执照" width="760px">
       <div class="club-modal-content">
         <div v-if="currentLicenseUrl" class="license-preview">
-          <img :src="currentLicenseUrl" alt="营业执照预览" />
+          <el-image
+            :src="currentLicenseUrl"
+            alt="营业执照预览"
+            fit="contain"
+            :preview-src-list="[currentLicenseUrl]"
+            preview-teleported
+          />
         </div>
         <div v-else class="empty-preview">暂无营业执照</div>
       </div>
@@ -872,25 +1057,84 @@ onMounted(fetchList);
 
     <!-- 新增 / 编辑俱乐部 -->
     <AppModal v-model="editModalVisible" :title="editingId ? '编辑俱乐部' : '新增俱乐部'" width="480px">
-      <div class="prototype-form club-modal-content">
-        <div class="field-row">
-          <label>俱乐部名称</label>
+      <div class="club-modal-body">
+        <div class="form-row">
+          <label class="required">俱乐部名称</label>
           <input v-model="editForm.name" placeholder="请输入俱乐部名称" />
         </div>
-        <div class="field-row">
-          <label>手机号</label>
-          <input v-model="editForm.phone" placeholder="请输入登录手机号" />
+        <div class="form-row">
+          <label class="required">手机号</label>
+          <input v-model="editForm.phone" placeholder="请输入手机号" />
         </div>
-        <div class="field-row">
-          <label>{{ editingId ? '登录密码（不修改请留空）' : '登录密码' }}</label>
-          <input v-model="editForm.password" type="password" placeholder="请输入登录密码" autocomplete="new-password" />
+        <div class="form-row">
+          <label>密码</label>
+          <input v-model="editForm.password" type="password" :placeholder="editingId ? '留空表示不修改密码' : '留空则初始密码为手机号'" autocomplete="new-password" />
         </div>
-        <div class="field-row">
-          <label>是否公开抢单</label>
-          <select v-model.number="editForm.publicGrab">
-            <option :value="0">否</option>
-            <option :value="1">是</option>
-          </select>
+
+        <div class="form-row">
+          <label>营业执照（上传图片）</label>
+          <input id="club-license-input" type="file" accept="image/*" hidden :disabled="licenseUploading" @change="handleLicense" />
+          <div v-if="editForm.licenseUrl" class="license-pick-preview">
+            <img :src="editForm.licenseUrl" alt="营业执照" />
+            <button type="button" class="license-close" @click="removeLicense" title="移除">×</button>
+          </div>
+          <button v-else type="button" class="license-square-btn" :disabled="licenseUploading" @click="openLicensePicker">
+            {{ licenseUploading ? '上传中…' : '＋' }}
+          </button>
+        </div>
+
+        <div class="form-row spec-section">
+          <label class="required">可接单规格</label>
+          <div class="spec-rows-inline">
+            <div v-for="(row, idx) in specRowList" :key="idx" class="spec-row">
+              <select v-model="row.gameId" class="spec-game-select" @change="onSpecGameChange(row)">
+                <option :value="null" disabled>选择游戏</option>
+                <option v-for="g in specCatalog" :key="g.gameId" :value="g.gameId">{{ g.gameName }}</option>
+              </select>
+              <select class="spec-value-select" :value="row.mode" @change="onSpecSelect(row, $event)">
+                <option value="all">全部</option>
+                <option v-for="s in specOptionsOf(row.gameId)" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
+              </select>
+              <button v-if="specRowList.length > 1" type="button" class="icon-btn spec-row-remove" @click="removeSpecRow(idx)" title="移除该行">−</button>
+              <button v-if="idx === specRowList.length - 1" type="button" class="icon-btn spec-add" @click="addSpecRow" title="新增一行">+</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>文件(上限5组文件)</label>
+          <input id="club-edit-file-input" type="file" multiple hidden :disabled="editFileUploading" @change="handleEditFiles" />
+          <div class="file-drop">
+            <div class="file-drop-head">
+              <button type="button" class="upload-btn-outline" :disabled="editFileUploading" @click="openEditFilePicker">
+                {{ editFileUploading ? '上传中…' : '上传文件' }}
+              </button>
+              <span class="file-drop-tip">上限5组文件</span>
+            </div>
+            <div v-if="editForm.files.length" class="file-chips">
+              <div v-for="(item, index) in editForm.files" :key="`${item.name}-${index}`" class="file-chip">
+                <el-image
+                  v-if="fileIsImage(item)"
+                  class="chip-thumb"
+                  :src="item.url"
+                  fit="cover"
+                  :preview-src-list="[item.url]"
+                  preview-teleported
+                  title="点击放大"
+                />
+                <span v-else class="chip-file-icon">文件</span>
+                <span class="chip-name" :title="item.name">{{ item.name }}</span>
+                <a v-if="!fileIsImage(item)" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                <button type="button" class="chip-remove" @click="removeEditFile(index)">×</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>备注</label>
+          <textarea v-model="editForm.remark" rows="3" maxlength="200" placeholder="请输入备注"></textarea>
+          <div class="reason-count">{{ editForm.remark.length }}/200</div>
         </div>
       </div>
       <template #footer>
@@ -941,7 +1185,44 @@ onMounted(fetchList);
         </div>
 
         <div class="asset-field-group">
-          <label class="field-label required">原因</label>
+          <label class="field-label">文件(上限5组文件)</label>
+          <div class="upload-box">
+            <input
+              id="club-asset-upload-input"
+              type="file"
+              multiple
+              hidden
+              :disabled="assetUploading"
+              @change="handleAssetFiles"
+            />
+            <div class="upload-toolbar">
+              <button type="button" class="upload-trigger" :disabled="assetUploading" @click="openAssetFilePicker">
+                {{ assetUploading ? '上传中…' : '上传文件' }}
+              </button>
+              <span class="upload-tip">上限5组文件</span>
+            </div>
+            <div v-if="assetForm.files.length" class="file-chips">
+              <div v-for="(item, index) in assetForm.files" :key="`${item.name}-${index}`" class="file-chip">
+                <el-image
+                  v-if="fileIsImage(item)"
+                  class="chip-thumb"
+                  :src="item.url"
+                  fit="cover"
+                  :preview-src-list="[item.url]"
+                  preview-teleported
+                  title="点击放大"
+                />
+                <span v-else class="chip-file-icon">文件</span>
+                <span class="chip-name" :title="item.name">{{ item.name }}</span>
+                <a v-if="!fileIsImage(item)" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                <button type="button" class="chip-remove" @click="removeAssetFile(index)">×</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="asset-field-group">
+          <label class="field-label required">{{ getAssetReasonLabel }}</label>
           <textarea
             v-model="assetForm.reason"
             rows="3"
@@ -999,7 +1280,7 @@ onMounted(fetchList);
               <div v-else class="spec-game-none">该游戏暂未配置规格</div>
             </div>
           </div>
-          <div class="spec-tip">勾选后该俱乐部可接对应游戏规格的订单；勾选“全部规格”表示该游戏下所有规格均可接，未勾选任何规格的游戏不会提交。</div>
+          <!-- <div class="spec-tip">勾选后该俱乐部可接对应游戏规格的订单；勾选“全部规格”表示该游戏下所有规格均可接，未勾选任何规格的游戏不会提交。</div> -->
         </template>
       </div>
       <template #footer>
@@ -1155,6 +1436,25 @@ onMounted(fetchList);
   color: #98a2b3;
 }
 
+.license-thumb-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.license-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid #eef0f4;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+.license-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .status-group {
   display: flex;
   flex-wrap: nowrap;
@@ -1171,7 +1471,7 @@ onMounted(fetchList);
   overflow: auto;
 }
 
-.license-preview img {
+.license-preview .el-image {
   max-width: 100%;
   max-height: 70vh;
   border-radius: 12px;
@@ -1753,6 +2053,273 @@ onMounted(fetchList);
 .btn-primary:hover {
   filter: brightness(1.06);
   box-shadow: 0 16px 30px var(--primary-border-strong);
+}
+
+/* 资产凭证文件列表 */
+.upload-box .upload-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.upload-trigger {
+  padding: 6px 14px;
+  border: 1px solid var(--primary-border, #c7d7fe);
+  border-radius: 8px;
+  background: #f5f8ff;
+  color: var(--primary, #4e6ef2);
+  cursor: pointer;
+}
+.upload-tip {
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.license-pick-preview {
+  position: relative;
+  width: 88px;
+  height: 88px;
+}
+.license-pick-preview img {
+  width: 88px;
+  height: 88px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  object-fit: cover;
+}
+.license-close {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+  background: rgba(31, 41, 55, 0.78);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  transition: all 0.18s ease;
+}
+.license-close:hover {
+  background: #f04438;
+}
+
+/* ===== 新增/编辑弹窗表单（对齐 GameListView 约定） ===== */
+.club-modal-body {
+  display: grid;
+  gap: 16px;
+}
+.club-modal-body .form-row {
+  display: grid;
+  gap: 8px;
+}
+.club-modal-body .form-row label,
+.club-modal-body .spec-section > label {
+  color: #5b6478;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.club-modal-body label.required::before {
+  content: '*';
+  color: #f04438;
+  margin-right: 4px;
+}
+.club-modal-body input,
+.club-modal-body select,
+.club-modal-body textarea {
+  width: 100%;
+  border: 1px solid #e3e7f0;
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 13px;
+  color: #1f2937;
+  box-sizing: border-box;
+  background: #fbfcfe;
+  font-family: inherit;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.club-modal-body input:focus,
+.club-modal-body select:focus,
+.club-modal-body textarea:focus {
+  border-color: #8b5cf6;
+  outline: none;
+  background: var(--bg-card);
+  box-shadow: 0 0 0 4px var(--primary-border);
+}
+
+/* 规格：每行 游戏下拉 + 规格下拉 + 删除；新增按钮排在最后一行后，不单独换行 */
+.spec-section {
+  display: grid;
+  gap: 10px;
+}
+.spec-rows-inline {
+  display: grid;
+  gap: 10px;
+}
+.spec-rows-inline .spec-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+.spec-rows-inline .spec-game-select {
+  width: 42%;
+  flex-shrink: 0;
+}
+.spec-rows-inline .spec-value-select {
+  flex: 1;
+  min-width: 0;
+}
+.spec-add {
+  align-self: center;
+}
+
+.icon-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid #e3e7f0;
+  background: #fbfcfe;
+  color: #475467;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.18s ease;
+}
+.icon-btn:hover {
+  border-color: #8b5cf6;
+  color: var(--primary);
+  background: var(--bg-card);
+}
+
+/* 营业执照正方形上传按钮 */
+.license-square-btn {
+  width: 88px;
+  height: 88px;
+  border: 1px dashed #c3c9d6;
+  border-radius: 12px;
+  background: #fbfcfe;
+  color: #98a2b3;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+}
+.license-square-btn:hover {
+  border-color: #3563e9;
+  color: #3563e9;
+}
+
+/* 文件虚线容器 + 描边上传按钮 */
+.file-drop {
+  border: 1.5px dashed #c9d4f5;
+  border-radius: 12px;
+  background: #f6f8ff;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.file-drop-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.upload-btn-outline {
+  border: 1px solid #2e9e82;
+  color: #2e9e82;
+  background: #fff;
+  border-radius: 8px;
+  padding: 7px 18px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.upload-btn-outline:hover {
+  background: #eef9f5;
+}
+.file-drop-tip {
+  color: #98a2b3;
+  font-size: 12px;
+}
+.file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid #eef0f4;
+  border-radius: 10px;
+  background: #fff;
+  max-width: 260px;
+}
+.chip-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: zoom-in;
+}
+.chip-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.chip-file-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #6366f1;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.chip-name {
+  color: #344054;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.chip-download {
+  color: #667085;
+  font-size: 14px;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.chip-download:hover {
+  color: #3563e9;
+}
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: #98a2b3;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.chip-remove:hover {
+  color: #f04438;
 }
 </style>
 

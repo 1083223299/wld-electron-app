@@ -6,10 +6,8 @@ import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
-import { gameApi, HOLD_FORM_OPTIONS } from '../../../api/modules/game';
+import { gameApi } from '../../../api/modules/game';
 import SkuMapping from './SkuMapping.vue';
-
-const holdFormOptions = HOLD_FORM_OPTIONS;
 
 const { confirm } = useConfirm();
 const { show } = useToast();
@@ -50,50 +48,35 @@ const loading = ref(false);
 const columns = [
   { key: 'id', title: '游戏ID' },
   { key: 'name', title: '游戏名称' },
-  { key: 'status', title: '状态' },
-  { key: 'settleDays', title: '结算天数' },
-  { key: 'createTime', title: '创建时间' },
+  { key: 'settleDays', title: '账期天数' },
+  { key: 'createdAt', title: '创建时间' },
   { key: 'op', title: '操作' },
 ];
 
-/** 状态展示：兼容常见枚举（1/0、enabled/disabled、on/off 等），未知值原样显示 */
-function statusText(status) {
-  if (status === null || status === undefined || status === '') return '-';
-  const s = String(status).toLowerCase();
-  if (['1', 'true', 'enabled', 'enable', 'on', 'active', '正常', '启用'].includes(s)) return '启用';
-  if (['0', 'false', 'disabled', 'disable', 'off', 'inactive', '停用', '禁用'].includes(s)) return '停用';
-  return String(status);
-}
-
-/** 创建时间（'YYYY-MM-DD HH:mm:ss'）与筛选区间比较 */
-function inDateRange(value, range) {
-  if (!Array.isArray(range) || !range.length) return true;
-  const [start, end] = range;
-  if (!start && !end) return true;
-  if (value == null || value === '') return false; // 无创建时间数据时不参与时间筛选
-  const day = String(value).slice(0, 10);
-  if (start && day < String(start).slice(0, 10)) return false;
-  if (end && day > String(end).slice(0, 10)) return false;
-  return true;
+/** 日期（Date 或字符串）→ 'yyyy-MM-dd'，供 createdFrom/createdTo 使用 */
+function toDateStr(value) {
+  if (!value) return '';
+  const d = value instanceof Date ? value : new Date(String(value).replace(/-/g, '/'));
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 async function fetchList() {
   loading.value = true;
   try {
-    // 后端列表接口全量返回，分页与筛选在本地完成
-    const all = (await gameApi.list()) || [];
-    let list = all;
-    if (filter.gameId) {
-      const kw = String(filter.gameId).trim();
-      list = list.filter((g) => String(g.id) === kw);
-    }
-    if (filter.gameName) {
-      const kw = String(filter.gameName).trim();
-      list = list.filter((g) => String(g.name || '').includes(kw));
-    }
-    list = list.filter((g) => inDateRange(g.createTime, filter.createTime));
-    total.value = list.length;
-    rows.value = list.slice((page.value - 1) * pageSize.value, page.value * pageSize.value);
+    // 服务端分页/筛选：id 完全匹配、name 模糊、createdFrom/createdTo 区间
+    const range = Array.isArray(filter.createTime) && filter.createTime.length === 2 ? filter.createTime : [];
+    const res = await gameApi.list({
+      page: page.value,
+      pageSize: pageSize.value,
+      id: filter.gameId,
+      name: filter.gameName,
+      createdFrom: toDateStr(range[0]),
+      createdTo: toDateStr(range[1]),
+    });
+    rows.value = (res && res.list) || [];
+    total.value = (res && res.total) || 0;
   } finally {
     loading.value = false;
   }
@@ -124,16 +107,17 @@ const editingId = ref(null); // null = 新增
 const editForm = reactive({
   name: '',
   settleDays: '',
-  holdForm: '',
   specs: [''],
 });
+// 编辑时记录的原始规格（含 id），用于识别表单中被删除的行 → 显式调 DELETE 删除
+const originalSpecs = ref([]);
 
 function openCreate() {
   editingId.value = null;
   editForm.name = '';
   editForm.settleDays = '';
-  editForm.holdForm = '';
   editForm.specs = [''];
+  originalSpecs.value = [];
   editVisible.value = true;
 }
 
@@ -141,14 +125,15 @@ async function openEdit(row) {
   editingId.value = row.id;
   editForm.name = row.name || '';
   editForm.settleDays = row.settleDays ?? '';
-  editForm.holdForm = row.holdForm || '';
   editForm.specs = [''];
   editVisible.value = true;
   try {
-    // 列表接口不返回规格，编辑时单独拉取当前规格
+    // 列表接口不返回规格，编辑时单独拉取当前规格（含 id，删除规格时需要）
     const specs = (await gameApi.specs(row.id)) || [];
+    originalSpecs.value = specs;
     editForm.specs = specs.length ? specs.map((s) => s.name) : [''];
   } catch {
+    originalSpecs.value = [];
     editForm.specs = [''];
   }
 }
@@ -171,7 +156,7 @@ async function submitEdit() {
     return;
   }
   if (editForm.name.trim().length > 15) {
-    show('游戏名称不能超过15个字', 'warning');
+    show('游戏名称最多15字', 'warning');
     return;
   }
   const specs = editForm.specs.map((s) => s.trim()).filter(Boolean);
@@ -188,34 +173,33 @@ async function submitEdit() {
     show('单个游戏规格不能超过50个字', 'warning');
     return;
   }
-  if (!editForm.settleDays || Number(editForm.settleDays) <= 0) {
-    show('请输入结算天数', 'warning');
+  // 账期天数：必填正整数（与后端口径一致：不传/0/负数/小数/非数字均返回「请填写账期天数」）
+  const settleDays = Number(editForm.settleDays);
+  if (!editForm.settleDays || !Number.isInteger(settleDays) || settleDays <= 0) {
+    show('请填写账期天数', 'warning');
     return;
-  }
-  // 存单表单：三角洲新建未选时按后端约定默认 WARRANTY（保底把数）
-  let holdForm = editForm.holdForm;
-  if (!holdForm) {
-    if (!editingId.value && editForm.name.trim().includes('三角洲')) {
-      holdForm = 'WARRANTY';
-    } else {
-      show('请选择存单表单', 'warning');
-      return;
-    }
   }
 
   const payload = {
     name: editForm.name.trim(),
-    settleDays: Number(editForm.settleDays),
-    holdForm,
+    settleDays,
     specs,
   };
 
   try {
     if (editingId.value) {
-      await gameApi.updateWithSpecs(editingId.value, payload);
+      // 编辑：规格为“补齐”语义——PUT 内联提交会新增缺失规格、保留已有规格；
+      // 表单中被删除的规格需显式调 DELETE /games/{gameId}/specs/{id} 删除
+      const removed = originalSpecs.value.filter((s) => !specs.includes(s.name));
+      await gameApi.update(editingId.value, payload);
+      for (const spec of removed) {
+        if (spec.id != null) {
+          await gameApi.removeSpec(editingId.value, spec.id);
+        }
+      }
       show('编辑成功', 'success');
     } else {
-      await gameApi.createWithSpecs(payload);
+      await gameApi.create(payload);
       show('新增成功', 'success');
     }
     editVisible.value = false;
@@ -289,17 +273,6 @@ onMounted(fetchList);
         </div>
       </template>
 
-      <template #cell-status="{ row }">
-        <span
-          v-if="row.status !== null && row.status !== undefined && row.status !== ''"
-          class="status-chip"
-          :class="statusText(row.status) === '启用' ? 'status-on' : 'status-off'"
-        >
-          {{ statusText(row.status) }}
-        </span>
-        <span v-else>-</span>
-      </template>
-
       <template #cell-settleDays="{ row }">
         {{ row.settleDays != null ? `${row.settleDays}天` : '-' }}
       </template>
@@ -321,7 +294,7 @@ onMounted(fetchList);
             <input v-model="editForm.name" maxlength="15" placeholder="上限15个字" />
           </div>
           <div class="form-row">
-            <label class="required">结算天数</label>
+            <label class="required">账期天数</label>
             <div class="bill-period-wrap">
               <input
                 v-model.number="editForm.settleDays"
@@ -332,16 +305,6 @@ onMounted(fetchList);
               <span class="unit">天</span>
             </div>
           </div>
-        </div>
-
-        <div class="form-row">
-          <label class="required">存单表单</label>
-          <select v-model="editForm.holdForm" class="hold-form-select">
-            <option value="" disabled>请选择存单表单</option>
-            <option v-for="opt in holdFormOptions" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </option>
-          </select>
         </div>
 
         <div class="spec-section">
@@ -421,28 +384,6 @@ onMounted(fetchList);
 
 .link-btn.danger:hover {
   background: rgba(217, 45, 32, 0.08);
-}
-
-/* 状态标签 */
-.status-chip {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 20px;
-}
-
-.status-on {
-  color: #067647;
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-}
-
-.status-off {
-  color: #7a5af8;
-  background: rgba(139, 92, 246, 0.08);
-  border: 1px solid rgba(139, 92, 246, 0.2);
 }
 
 /* 弹窗 */

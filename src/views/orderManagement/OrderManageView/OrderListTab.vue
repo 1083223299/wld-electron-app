@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import AppModal from '../../../components/AppModal.vue';
@@ -12,13 +13,13 @@ import {
   STATUS_OPTIONS,
   AUDIT_OPTIONS,
   TYPE_OPTIONS,
-  CHANNEL_OPTIONS,
   statusText,
   auditText,
+  attributeText,
   typeText,
-  channelText,
 } from '../../../api/modules/order';
 import { gameApi } from '../../../api/modules/game';
+import { channelApi } from '../../../api/modules/channel';
 import { clubApi } from '../../../api/modules/club';
 import { playerApi } from '../../../api/modules/player';
 import { handoverApi } from '../../../api/modules/handover';
@@ -51,7 +52,8 @@ import {
  *   playerRemark（陪玩备注）/roleName/gameName/specName/canChangeOwner 等已映射并展示，
  *   可绑主单候选 GET /orders/bindable-parents、批量解绑 POST /orders/unbind、回退 POST /orders/{id}/rollback
  * - 仍缺（保留原型 UI/兜底）：编辑存单 hold 独立入口、交易关闭 close 按钮（原型未要求，未擅自加）；
- *   SPECIAL 订单类型已入后端映射，文档 orderType 参数枚举待同步（前端 ORDER_TYPE 已含 SPECIAL）
+ * - 订单类型 orderType（后端确认 2026-10-22）：新增/筛选/编辑统一规范码 NORMAL/DISCOUNT（特惠单=DISCOUNT）；
+ *   SPECIAL 仅为历史兼容码（编辑接口仍收，历史订单回显用，前端 ORDER_TYPE 已含 DISCOUNT/SPECIAL）
  */
 const { confirm } = useConfirm();
 const { show } = useToast();
@@ -96,12 +98,12 @@ const filter = reactive({
   createTime: [],
 });
 
-const searchFields = [
+const searchFields = computed(() => [
   { prop: 'orderNo', label: '本平台订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 4 },
   { prop: 'thirdOrderNo', label: '第三方订单号', type: 'input', placeholder: '请输入订单号（完全匹配）', span: 4 },
   {
     prop: 'channel', label: '渠道', type: 'select', placeholder: '全部', span: 4,
-    options: [{ label: '全部', value: '' }, ...CHANNEL_OPTIONS],
+    options: filterChannelOptions.value, // 真实渠道接口动态加载（含抖音；无任何本地硬编码渠道）
   },
   {
     prop: 'status', label: '订单状态', type: 'select', placeholder: '全部', span: 4,
@@ -120,7 +122,6 @@ const searchFields = [
     options: [{ label: '全部', value: '' }, ...TYPE_OPTIONS],
   },
   { prop: 'claimer', label: '领取人', type: 'input', placeholder: '请输入领取人（企微名/客服名）', span: 4 },
-  { prop: 'ownerId', label: '领取人账号ID', type: 'input', inputType: 'number', placeholder: '仅全部订单时有效', span: 4 },
   {
     prop: 'clientType', label: '客户端', type: 'select', placeholder: '全部', span: 4,
     options: [{ label: '全部', value: '' }, ...CLIENT_OPTIONS.map((item) => ({ label: item, value: item }))],
@@ -137,26 +138,38 @@ const searchFields = [
     endPlaceholder: '结束时间',
     span: 4,
   },
-];
+]);
 
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
   filterKeys: ['orderNo', 'thirdOrderNo', 'channel', 'status', 'auditStatus', 'attribute', 'orderType', 'claimer', 'ownerId', 'clientType', 'tag', 'createTime'],
 });
 restoreFilter(filter);
 
-/* ===== 游戏/规格目录（供下拉选择与列表展示；真实联调时规格 id 以游戏/规格列表接口为准） ===== */
+// 支持外部跳转定位（如收益明细/提现明细点击"关联订单号"）：URL 带 ?orderNo= 时预填筛选，onMounted 首次查询自动带上该参数
+const route = useRoute();
+const routeOrderNo = route.query.orderNo;
+if (routeOrderNo) filter.orderNo = String(routeOrderNo);
+
+/* ===== 游戏/规格目录（供下拉选择与列表展示；规格 id 取真实接口 GET /games/{id}/specs，新增/编辑提交真实 specId） ===== */
 const catalog = ref([]); // [{ id, name, specs: [{ id, name }] }]
 const catalogLoaded = ref(false);
 
 async function loadCatalog() {
   if (catalogLoaded.value) return;
   try {
-    const games = await gameApi.all();
-    catalog.value = (games || []).map((game) => ({
-      id: game.id,
-      name: game.name,
-      specs: (game.specs || []).map((name, i) => ({ id: i + 1, name })),
-    }));
+    const games = await gameApi.listAll(); // 真实游戏列表 [{ id, name }]（服务端分页接口取全量）
+    const list = await Promise.all(
+      (games || []).map(async (game) => {
+        let specs = [];
+        try {
+          specs = await gameApi.specs(game.id); // 真实规格列表 [{ id, name }]
+        } catch {
+          specs = [];
+        }
+        return { id: game.id, name: game.name, specs: specs.map((s) => ({ id: s.id, name: s.name })) };
+      })
+    );
+    catalog.value = list;
   } catch {
     catalog.value = [];
   } finally {
@@ -212,11 +225,12 @@ const ATTR_ENUM = { 主订单: 'MAIN', 子订单: 'SUB' };
 /** 客户端：原型中文 → 后端枚举（clients=PC/MOBILE；后端也接受自由字符串） */
 const CLIENT_ENUM = { 端游: 'PC', 手游: 'MOBILE' };
 
-/** 合并接口 tags 与派生标签（冻结/售后中） */
+/** 合并接口 tags 与派生标签（冻结/售后中/存单——存单由 hold.stored 派生，原型列表"存单"标签） */
 function mapTags(item = {}) {
   const tags = new Set((item.tags || []).map((t) => TAG_TEXT[t] || t));
   if (Number(item.frozen) === 1) tags.add('冻结');
   if (Number(item.afterSaleFlag) === 1) tags.add('售后中');
+  if (item.hold && item.hold.stored) tags.add('存单');
   return Array.from(tags);
 }
 
@@ -230,13 +244,13 @@ function mapOrderRow(item = {}) {
     id: item.id,
     orderNo: item.orderNo || '',
     thirdOrderNo: item.thirdOrderNo || '',
-    channel: channelText(item.channelCode),
+    channel: channelDisplayName(item.channelCode),
     channelCode: item.channelCode,
     amount: Number(item.amount) || 0,
     product: item.itemName || '',
-    gameName: gameNameOf(item.gameId),
+    gameName: item.gameName || gameNameOf(item.gameId), // 详情接口直接返回游戏名；列表无则目录反查
     gameId: item.gameId,
-    spec: specNameOf(item.gameId, item.specId),
+    spec: item.specName || specNameOf(item.gameId, item.specId), // 详情接口直接返回规格名
     specId: item.specId,
     clients: item.clients || '',
     status: statusText(item.status),
@@ -257,8 +271,8 @@ function mapOrderRow(item = {}) {
     roleName: item.roleName || '',
     /* teamCode（组队码）：列表/详情已返回 */
     groupCode: item.teamCode || item.groupCode || '',
-    /* 主子单：parentOrderNo 为主单订单号（详情返回），children 为子订单列表 */
-    attribute: item.attribute || (item.parentOrderId ? '子订单' : '—'),
+    /* 主子单：接口返回 MAIN/SUB（英文），attributeText 转中文；parentOrderId 兜底判断 */
+    attribute: item.attribute ? attributeText(item.attribute) : (item.parentOrderId ? '子订单' : '—'),
     bound: !!item.parentOrderId,
     mainOrderId: item.parentOrderId,
     mainOrderNo: item.parentOrderNo || (item.parentOrderId ? String(item.parentOrderId) : ''),
@@ -282,7 +296,11 @@ function mapOrderRow(item = {}) {
     proofUploadTime: item.proofUploadTime || '',
     playerRemark: item.playerRemark || '',
     lastRejectReason: item.rejectReason || item.lastRejectReason || '',
-    statusCount: '',
+    /* 待接单名额数（原型：待接单(1/2) = 当前接单/总数）：列表返回 takenCount/playerCount 时自动拼，未返回则留空 */
+    playerCount: item.playerCount,
+    takenCount: item.takenCount,
+    assignedPlayerCount: item.assignedPlayerCount,
+    statusCount: item.takenCount != null && item.playerCount != null ? `${item.takenCount}/${item.playerCount}` : '',
   };
 }
 
@@ -358,11 +376,13 @@ function handleReset() {
 
 onMounted(async () => {
   await loadCatalog();
+  await loadChannels(); // 渠道映射就绪后再拉列表（列表渠道列回显渠道名称，非写死编码映射）
   fetchList();
 });
 
 /* ===== 表格列（依据原型列顺序：本平台订单号/第三方订单号/订单金额（元）/购买项目/游戏名称/客户端/游戏规格/角色名/订单状态/审核状态/订单属性/领取人/创建时间/操作；标签并入订单状态列） ===== */
 const columns = [
+  { key: 'orderType', title: '订单类型' },
   { key: 'orderNo', title: '本平台订单号' },
   { key: 'thirdOrderNo', title: '第三方订单号' },
   { key: 'amount', title: '订单金额（元）' },
@@ -383,21 +403,26 @@ const columns = [
 function canShow(row, action) {
   /* 角色维度 */
   if (action === '审核') return ['admin', 'audit'].includes(userRole.value) && row.auditStatus === '待审核';
-  /* 查看：待接单、进行中、已完成、交易关闭下展示（原型操作按钮规则） */
-  if (action === '查看') return ['待接单', '进行中', '已完成', '交易关闭'].includes(row.status);
+  /* 查看：待接单、进行中（审核已提交，未提交时由编辑代替）、已完成、交易关闭下展示（原型图） */
+  if (action === '查看')
+    return (
+      ['待接单', '已完成', '交易关闭'].includes(row.status) ||
+      (row.status === '进行中' && row.auditStatus !== '未提交')
+    );
   if (isAudit.value) return false; // 审核员除"审核/查看"外无其他操作按钮
 
   /* 状态维度（bound/refunded 接口暂未返回，待后端补充后自动收紧） */
   switch (action) {
     case '编辑': return row.status === '待派单' || (row.status === '进行中' && row.auditStatus === '未提交');
     case '绑主单': return row.status === '待派单' && !row.bound;
-    case '派单': return row.status === '待派单';
+    case '派单': return ['待派单', '待接单'].includes(row.status);
     case '加减价': return row.status === '待派单' && !row.refunded && !(row.tags || []).includes('部分退款');
     case '呼叫': return !['已完成', '交易关闭'].includes(row.status);
     case '解绑': return ['待派单', '进行中'].includes(row.status) && row.bound;
     case '冻结': return !['已完成', '交易关闭'].includes(row.status) && !row.frozen;
     case '解冻': return row.frozen;
-    case '退款': return !row.refunded && ['进行中', '已完成', '交易关闭'].includes(row.status);
+    /* 退款：原型「仅冻结后展示，点击后输入退款金额」；抖音订单不支持人工部分退款（提交时校验） */
+    case '退款': return row.frozen && !row.refunded;
     case '转单': return row.status === '进行中';
     case '回退': return row.status === '待接单';
     default: return false;
@@ -433,65 +458,22 @@ const detailLogs = ref([]);
 
 function mapDetail(item = {}) {
   return {
-    id: item.id,
-    orderNo: item.orderNo || '',
-    thirdOrderNo: item.thirdOrderNo || '',
-    channel: channelText(item.channelCode),
-    channelCode: item.channelCode,
+    // 复用列表行映射：hold（存单）/coverUrl/endUrl/progressUrls（凭证）/refunded/children/
+    // parentOrderNo/playerRemark/rejectReason/游戏名/规格名 等后端已补齐字段直接可用
+    ...mapOrderRow(item),
+    // 详情专属字段
     shopId: item.shopId || '',
-    amount: Number(item.amount) || 0,
     refundedAmount: Number(item.refundedAmount) || 0,
-    product: item.itemName || '',
-    gameName: gameNameOf(item.gameId),
-    gameId: item.gameId,
-    spec: specNameOf(item.gameId, item.specId),
-    specId: item.specId,
-    clients: item.clients || '',
     playerCount: item.playerCount,
     takenCount: item.takenCount,
     assignedPlayerCount: item.assignedPlayerCount,
-    status: statusText(item.status),
-    statusCode: item.status,
-    preStatus: item.preStatus,
-    auditStatus: auditText(item.auditStatus),
-    claimerName: item.ownerName || '',
-    claimerCorp: item.ownerWecomName || '',
-    ownerAccountId: item.ownerAccountId,
-    tags: mapTags(item),
-    frozen: Number(item.frozen) === 1,
-    freezeReason: item.freezeReason || '',
-    rejectCount: item.rejectCount || 0,
-    partialRefunded: Number(item.partialRefunded) === 1,
-    afterSale: Number(item.afterSaleFlag) === 1,
     platformAdjust: item.platformAdjust, // 减价为负
     clubAdjust: item.clubAdjust, // 减价为负
     settleDueAt: item.settleDueAt || '',
     settleDaysSnapshot: item.settleDaysSnapshot,
     slots: (item.slots || []).map((s) => ({ ...s })),
-    orderType: typeText(item.orderType),
-    orderTypeCode: item.orderType,
-    createTime: item.createdAt || '',
-    /* ---- 以下字段接口未返回，兜底供原型弹窗展示（待后端补充） ---- */
-    roleName: item.roleName || '',
-    /* teamCode（组队码）：新 OpenAPI 列表/详情已返回 */
-    groupCode: item.teamCode || item.groupCode || '',
-    attribute: item.parentOrderId ? '子订单' : '—', // parentOrderId 已由列表/详情返回
-    bound: !!item.parentOrderId,
-    refunded: false,
-    mainOrderNo: item.parentOrderId ? String(item.parentOrderId) : '',
-    groupQrUrl: item.groupQrUrl || '', // 企业群二维码：maintain 支持，详情已带回
-    depositTarget: item.depositTarget || '1000',
-    depositReason: item.depositReason || '',
-    depositFirst: item.depositFirst || '500',
-    depositSecond: item.depositSecond || '500',
-    depositImages: item.depositImages || [],
-    depositRemark: item.depositRemark || '',
-    proofFirst: item.proofFirst || '',
-    proofLast: item.proofLast || '',
-    proofProcess: item.proofProcess || [],
-    proofUploadTime: item.proofUploadTime || '',
-    playerRemark: item.playerRemark || '',
-    lastRejectReason: item.lastRejectReason || '',
+    freezeReason: item.freezeReason || '',
+    rejectCount: item.rejectCount || 0,
   };
 }
 
@@ -562,10 +544,19 @@ async function saveEdit(form) {
   }
 }
 
-/* ===== 新增订单（接口：POST /api/admin/orders 人工新增订单；orderType/playerCount 字段接口未提供不提交） ===== */
+/* ===== 新增订单（接口：POST /api/admin/orders 人工新增；字段与后端最新契约对齐 2026-10-22）
+ * 字段规则（后端确认，测试服已验证）：
+ * - 所属渠道：必填，传渠道编码或渠道名称；抖音仍走渠道同步，不能人工新增（下拉已过滤）
+ * - 第三方订单号：必填，最多64字；订单金额：必填，大于0，最多两位小数
+ * - 购买项目：必填，最多50字；客户端：必填，端游/手游可多选（提交中文逗号分隔）
+ * - 游戏名称/规格：必填，规格必须属于所选游戏（提交真实 gameId/specId）
+ * - 订单类型：可不填，只能是常规单或特惠单，不填按常规单（提交规范英文码 NORMAL/DISCOUNT，后端确认中英文都能收）
+ * - 打手人数：可不填，填了必须是正整数
+ * - 店铺ID/备注不在新增表单上（后端不接收，传了也丢弃），不展示不提交
+ */
 const addVisible = ref(false);
 const addForm = reactive({
-  channel: '抖音',
+  channel: '',
   thirdOrderNo: '',
   amount: '',
   product: '',
@@ -574,55 +565,130 @@ const addForm = reactive({
   specId: '',
   orderType: '',
   playerCount: '',
-  shopId: '',
-  remark: '',
 });
+
+/* 渠道数据：全部来自后端接口 GET /api/admin/channels（无本地硬编码渠道、无 mock）。
+ * 一份全量数据供两处使用：新增弹窗下拉（过滤抖音）与列表筛选下拉（含抖音）。 */
+const rawChannels = ref([]); // 渠道层原样数据 [{ id, name, code, editable, shops }]（不展开 shops）
+const channelsLoaded = ref(false);
+const channelLoading = ref(false);
+
+/* 渠道字段兼容：后端列表接口返回 name（渠道名）+ code（渠道编码，服务端生成），
+ * 早期/历史结构可能为 shopName / channelCode，统一兼容读取（后端确认：名称字段是 name、编码字段是 code） */
+const channelNameOf = (ch = {}) => String(ch.name || ch.shopName || ch.channelName || '').trim();
+const channelCodeOf = (ch = {}) => String(ch.channelCode || ch.code || '').trim();
+
+const isDouyinChannel = (ch = {}) => {
+  const code = channelCodeOf(ch).toUpperCase();
+  const name = channelNameOf(ch);
+  return code === 'DOUYIN' || code.startsWith('DOUYIN') || name === '抖音' || name.includes('抖音');
+};
+
+async function loadChannels() {
+  if (channelsLoaded.value) return;
+  channelLoading.value = true;
+  try {
+    rawChannels.value = (await channelApi.list()) || [];
+    channelsLoaded.value = true;
+  } catch {
+    rawChannels.value = []; // 拉取失败不置 loaded，下次自动重试
+  } finally {
+    channelLoading.value = false;
+  }
+}
+
+/** 渠道项 → 下拉选项：label 优先渠道名（后端 name），value 优先渠道编码（后端接受编码或名称）；
+ * 名称和编码都读不到的行剔除（无可用标识、空 value 会导致下拉选不中） */
+const toChannelOption = (ch) => {
+  const code = channelCodeOf(ch);
+  const name = channelNameOf(ch);
+  return { label: name || code, value: code || name };
+};
+
+/** 新增弹窗渠道下拉：真实渠道，剔除抖音（抖音走渠道同步，人工建单会拒绝） */
+const addChannelOptions = computed(() =>
+  rawChannels.value.filter((ch) => !isDouyinChannel(ch)).map(toChannelOption).filter((opt) => opt.value)
+);
+
+/** 列表筛选渠道下拉：全部真实渠道（含抖音，展示 name、值为 code，供服务端按 channelCode 查询） */
+const filterChannelOptions = computed(() => [
+  { label: '全部', value: '' },
+  ...rawChannels.value.map(toChannelOption).filter((opt) => opt.value),
+]);
+
+/* 渠道编码 → 名称映射（后端契约：列表/详情只回 channelCode，渠道列显示名称用渠道接口 code→name 映射，
+ * 不使用写死的 DOUYIN / XHS / PRIVATE；映射来源 GET /api/admin/channels） */
+const channelNameMap = computed(() => {
+  const map = new Map();
+  rawChannels.value.forEach((ch) => {
+    const code = channelCodeOf(ch);
+    const name = channelNameOf(ch);
+    if (code) map.set(code, name || code);
+  });
+  return map;
+});
+
+/** 渠道编码 → 渠道名称；未匹配到时原样显示编码 */
+function channelDisplayName(code) {
+  if (!code) return '—';
+  const key = String(code).trim();
+  return channelNameMap.value.get(key) || key;
+}
 
 function openAdd() {
   Object.assign(addForm, {
-    channel: '抖音', thirdOrderNo: '', amount: '', product: '',
+    channel: '', thirdOrderNo: '', amount: '', product: '',
     clientType: [], gameId: '', specId: '', orderType: '', playerCount: '',
-    shopId: '', remark: '',
   });
+  loadChannels(); // 首次打开时拉取真实渠道（新增与列表筛选共用）
   addVisible.value = true;
 }
 
 const addSpecOptions = computed(() => specOptionsOf(addForm.gameId));
-const addChannelOptions = computed(() =>
-  CHANNEL_OPTIONS.map((item) => ({ label: item.label, value: item.label }))
-);
-const addChannelCode = computed(() => {
-  const hit = CHANNEL_OPTIONS.find((item) => item.label === addForm.channel);
-  return hit ? hit.value : addForm.channel;
-});
 
 async function submitAdd() {
-  const { channel, thirdOrderNo, amount, product, clientType, gameId, specId, shopId, remark } = addForm;
-  if (!channel) return show('请选择所属渠道', 'warning');
-  if (!thirdOrderNo.trim()) return show('请输入第三方订单号', 'warning');
-  const amountNum = Number(amount);
-  if (!amount || !Number.isFinite(amountNum) || amountNum <= 0) return show('请输入正确的订单金额', 'warning');
-  if (!product.trim()) return show('请输入购买项目', 'warning');
-  if (product.trim().length > 50) return show('购买项目不能超过50字', 'warning');
+  const { channel, thirdOrderNo, amount, product, clientType, gameId, specId } = addForm;
+  if (!String(channel || '').trim()) return show('请选择所属渠道', 'warning');
+  const thirdNo = String(thirdOrderNo || '').trim();
+  if (!thirdNo) return show('请输入第三方订单号', 'warning');
+  if (thirdNo.length > 64) return show('第三方订单号最多64字', 'warning');
+  const amountStr = String(amount ?? '').trim();
+  if (!amountStr) return show('请输入订单金额', 'warning');
+  if (!/^\d+(\.\d{1,2})?$/.test(amountStr)) return show('订单金额需大于0，最多两位小数', 'warning');
+  const amountNum = Number(amountStr);
+  if (!Number.isFinite(amountNum) || amountNum <= 0) return show('订单金额需大于0', 'warning');
+  if (!String(product || '').trim()) return show('请输入购买项目', 'warning');
+  if (String(product).trim().length > 50) return show('购买项目不能超过50字', 'warning');
   if (!clientType.length) return show('请选择客户端', 'warning');
   if (!gameId) return show('请选择游戏名称', 'warning');
   if (!specId) return show('请选择游戏规格', 'warning');
 
+  // 打手人数：可不填，填了必须是正整数
+  let playerCount;
+  if (addForm.playerCount !== '' && addForm.playerCount != null) {
+    const pc = Number(addForm.playerCount);
+    if (!Number.isInteger(pc) || pc <= 0) return show('打手人数必须是正整数', 'warning');
+    playerCount = pc;
+  }
+
+  const payload = {
+    channelCode: String(channel).trim(), // 传渠道编码（后端也接受渠道名称）
+    thirdOrderNo: thirdNo,
+    amount: amountNum,
+    itemName: String(product).trim(),
+    clients: clientType.join(','), // 后端契约示例："端游,手游"
+    gameId: Number(gameId),
+    specId: Number(specId),
+  };
+  // 订单类型：可不填，不填按常规单；填了提交规范英文码 NORMAL/DISCOUNT（后端确认中英文都能收、入库英文码；
+  // 特惠单对应 DISCOUNT，SPECIAL 在新增里会被拒绝）
+  if (addForm.orderType) payload.orderType = addForm.orderType;
+  // 打手人数：可不填，填了必须是正整数
+  if (playerCount !== undefined) payload.playerCount = playerCount;
+  // 店铺ID/备注：不在新增表单上（后端不接收），不提交
+
   try {
-    // 人工新增订单：create body 已支持 orderType/playerCount（后端确认），其余原型字段接口未提供不提交
-    await orderApi.create({
-      channelCode: addChannelCode.value,
-      shopId: String(shopId || '').trim(),
-      thirdOrderNo: thirdOrderNo.trim(),
-      amount: amountNum,
-      itemName: product.trim(),
-      clients: clientType.length ? clientType.join(',') : '',
-      gameId: Number(gameId),
-      specId: Number(specId),
-      orderType: addForm.orderType || 'NORMAL',
-      playerCount: addForm.playerCount !== '' && addForm.playerCount != null ? Number(addForm.playerCount) || 0 : undefined,
-      remark: String(remark || '').trim(),
-    });
+    await orderApi.create(payload);
     addVisible.value = false;
     show('新增成功', 'success');
     fetchList();
@@ -1160,11 +1226,12 @@ async function submitAudit({ pass, reason }) {
         <button class="add-btn" @click="openAdd">新增</button>
       </template>
 
+      <template #cell-orderType="{ row }">
+        <span :class="['order-type-tag', { 'is-special': row.orderType === '特惠单' }]">{{ row.orderType || '—' }}</span>
+      </template>
+
       <template #cell-orderNo="{ row }">
-        <span class="order-no-cell">
-          <span v-if="row.orderType === '特惠单'" class="special-tag">特惠</span>
-          <span>{{ row.orderNo }}</span>
-        </span>
+        <span class="order-no-cell">{{ row.orderNo }}</span>
       </template>
 
       <template #cell-amount="{ row }">{{ money(row.amount) }}</template>
@@ -1247,22 +1314,22 @@ async function submitAudit({ pass, reason }) {
       </template>
     </AppModal>
 
-    <!-- 新增订单（人工新增订单 create；订单类型/打手人数字段接口未提供） -->
+    <!-- 新增订单（接口：POST /api/admin/orders；店铺ID/备注后端不接收，不展示） -->
     <AppModal v-model="addVisible" title="新增数据" width="520px">
       <div class="dialog-form">
         <div class="form-row">
           <label class="required">所属渠道</label>
-          <el-select v-model="addForm.channel" style="width: 100%">
+          <el-select v-model="addForm.channel" placeholder="请选择渠道（抖音不支持人工新增）" style="width: 100%" filterable :loading="channelLoading">
             <el-option v-for="item in addChannelOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </div>
         <div class="form-row">
           <label class="required">第三方订单号</label>
-          <input v-model="addForm.thirdOrderNo" placeholder="请输入第三方订单号" />
+          <input v-model="addForm.thirdOrderNo" maxlength="64" placeholder="请输入第三方订单号，最多64字" />
         </div>
         <div class="form-row">
           <label class="required">订单金额(元)</label>
-          <input v-model="addForm.amount" type="number" step="0.01" min="0" placeholder="支持小数点后两位" />
+          <input v-model="addForm.amount" type="number" step="0.01" min="0" placeholder="大于0，最多两位小数" />
         </div>
         <div class="form-row">
           <label class="required">购买项目</label>
@@ -1287,24 +1354,16 @@ async function submitAudit({ pass, reason }) {
           </el-select>
         </div>
         <div class="form-row">
-          <label>店铺ID</label>
-          <input v-model="addForm.shopId" placeholder="请输入店铺ID" />
-        </div>
-        <div class="form-row">
           <label>订单类型</label>
           <el-radio-group v-model="addForm.orderType">
-            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.label">{{ item.label }}</el-radio>
+            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
           </el-radio-group>
         </div>
         <div class="form-row">
           <label>打手人数</label>
-          <input v-model="addForm.playerCount" type="number" min="0" step="1" placeholder="仅支持输入整数" />
+          <input v-model="addForm.playerCount" type="number" min="1" step="1" placeholder="仅支持输入正整数" />
         </div>
-        <div class="form-row">
-          <label>备注</label>
-          <textarea v-model="addForm.remark" rows="3" maxlength="200" placeholder="可粘贴识别原文，上限200字"></textarea>
-          <div class="char-count">{{ addForm.remark.length }}/200</div>
-        </div>
+        <!-- 店铺ID / 备注：不在新增表单上（后端不接收，传了也丢弃），不展示 -->
       </div>
       <template #footer>
         <button class="btn btn-plain" @click="addVisible = false">取消</button>
@@ -1736,19 +1795,30 @@ async function submitAudit({ pass, reason }) {
 
 .status-badge {
   display: inline-block;
-  padding: 3px 9px;
-  border-radius: 999px;
+  padding: 3px 10px;
+  border-radius: 7px;
   font-size: 12px;
-  font-weight: 600;
-  line-height: 1.4;
+  font-weight: 700;
+  line-height: 1.5;
   white-space: nowrap;
+  color: #fff;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
-.status-success { color: #0f9f6e; background: rgba(15, 159, 110, 0.08); }
-.status-warning { color: #b45309; background: rgba(180, 83, 9, 0.08); }
-.status-info { color: #1d4ed8; background: rgba(29, 78, 216, 0.08); }
-.status-danger { color: #d92d20; background: rgba(217, 45, 32, 0.08); }
-.status-muted { color: #475467; background: rgba(71, 84, 103, 0.08); }
+.status-success { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 2px 10px rgba(16, 185, 129, 0.35); }
+.status-warning { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 2px 10px rgba(245, 158, 11, 0.35); }
+.status-info { background: linear-gradient(135deg, #3b82f6, #2563eb); box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35); }
+.status-danger { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35); }
+.status-muted { background: linear-gradient(135deg, #6b7280, #4b5563); box-shadow: 0 2px 8px rgba(107, 114, 128, 0.25); }
+
+/* 订单标签独立列（原型列表字段） */
+.tag-list {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
 
 .order-tag {
   display: inline-block;

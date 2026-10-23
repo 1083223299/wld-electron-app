@@ -18,9 +18,8 @@ const { page, pageSize, onPageSizeChange, onPageChange } = useListMemory({});
 const loading = ref(false);
 
 const columns = [
-  { key: 'channelCode', title: '渠道编码' },
-  { key: 'shopId', title: '店铺ID' },
-  { key: 'shopName', title: '店铺名称' },
+  { key: 'id', title: '渠道ID' },
+  { key: 'name', title: '渠道名称' },
   { key: 'op', title: '操作' },
 ];
 
@@ -49,20 +48,21 @@ function rowId(row) {
   return row.id;
 }
 
+/** 渠道是否可操作：后端 editable 为 0/1（数字），兼容布尔；0 或 false = 系统写死渠道（如抖音），不可编辑/删除 */
+function isEditable(row) {
+  return !(row.editable === 0 || row.editable === '0' || row.editable === false);
+}
+
 // ============ 新增 / 编辑 ============
 const editVisible = ref(false);
 const editingId = ref(null); // null = 新增
 const editForm = reactive({
-  channelCode: '',
-  shopId: '',
-  shopName: '',
+  name: '',
 });
 
 function openCreate() {
   editingId.value = null;
-  editForm.channelCode = '';
-  editForm.shopId = '';
-  editForm.shopName = '';
+  editForm.name = '';
   editVisible.value = true;
 }
 
@@ -70,35 +70,27 @@ function openEdit(row) {
   const id = rowId(row);
   if (id == null) return;
   editingId.value = id;
-  editForm.channelCode = row.channelCode || '';
-  editForm.shopId = row.shopId || '';
-  editForm.shopName = row.shopName || '';
+  editForm.name = row.name || '';
   editVisible.value = true;
 }
 
 async function submitEdit() {
-  const channelCode = editForm.channelCode.trim();
-  const shopId = editForm.shopId.trim();
-  const shopName = editForm.shopName.trim();
-  if (!editingId.value && !channelCode) {
-    show('请输入渠道编码', 'warning');
+  const name = editForm.name.trim();
+  if (!name) {
+    show('请输入渠道名称', 'warning');
     return;
   }
-  if (!shopId) {
-    show('请输入店铺ID', 'warning');
-    return;
-  }
-  if (!shopName) {
-    show('请输入店铺名称', 'warning');
+  if (name.length > 15) {
+    show('渠道名称最多15个字', 'warning');
     return;
   }
 
   try {
     if (editingId.value) {
-      await channelApi.update(editingId.value, { shopId, shopName });
+      await channelApi.update(editingId.value, { name });
       show('编辑成功', 'success');
     } else {
-      await channelApi.create({ channelCode, shopId, shopName });
+      await channelApi.create({ name });
       show('新增成功', 'success');
     }
     editVisible.value = false;
@@ -114,7 +106,7 @@ async function handleDelete(row) {
   if (id == null) return;
   const ok = await confirm({
     title: '删除确认',
-    message: `确认删除渠道「${row.shopName || row.channelCode}」吗？删除后该渠道下的历史订单仍可关联查询。`,
+    message: `确认删除渠道「${row.name || row.id}」吗？该渠道已有订单时无法删除。`,
     okText: '确认删除',
   });
   if (!ok) return;
@@ -145,60 +137,35 @@ onMounted(fetchList);
         <button class="btn btn-primary" @click="openCreate">新增</button>
       </template>
 
-      <template #cell-channelCode="{ row }">
-        {{ row.channelCode || '-' }}
+      <template #cell-id="{ row }">
+        {{ row.id != null ? row.id : '-' }}
       </template>
 
-      <template #cell-shopId="{ row }">
-        {{ row.shopId || '-' }}
-      </template>
-
-      <template #cell-shopName="{ row }">
-        {{ row.shopName || '-' }}
+      <template #cell-name="{ row }">
+        {{ row.name || '-' }}
       </template>
 
       <template #cell-op="{ row }">
-        <div class="action-group">
+        <!-- editable 为 0（系统写死渠道，如抖音接入第三方API）时不显示编辑/删除 -->
+        <div v-if="isEditable(row)" class="action-group">
           <button class="link-btn" @click="openEdit(row)">编辑</button>
           <button class="link-btn danger" @click="handleDelete(row)">删除</button>
         </div>
+        <span v-else>-</span>
       </template>
     </DataTable>
 
-    <!-- 新增 / 编辑 弹窗 -->
+    <!-- 新增 / 编辑 弹窗：按原型字段，只有渠道名称 -->
     <AppModal v-model="editVisible" :title="editingId ? '编辑' : '新增'" width="640px">
       <div class="channel-modal-content">
         <div class="form-row">
-          <label class="required">渠道编码</label>
+          <label class="required">渠道名称</label>
           <input
-            v-model="editForm.channelCode"
-            :disabled="!!editingId"
-            maxlength="50"
-            placeholder="如 DOUYIN / XHS，创建后不可修改"
+            v-model="editForm.name"
+            maxlength="15"
+            placeholder="请输入渠道名称"
             @keyup.enter="submitEdit"
           />
-          <p v-if="editingId" class="field-hint">渠道编码创建后不可修改</p>
-        </div>
-
-        <div class="form-grid">
-          <div class="form-row">
-            <label class="required">店铺ID</label>
-            <input
-              v-model="editForm.shopId"
-              maxlength="50"
-              placeholder="请输入店铺ID"
-              @keyup.enter="submitEdit"
-            />
-          </div>
-          <div class="form-row">
-            <label class="required">店铺名称</label>
-            <input
-              v-model="editForm.shopName"
-              maxlength="50"
-              placeholder="请输入店铺名称"
-              @keyup.enter="submitEdit"
-            />
-          </div>
         </div>
       </div>
       <template #footer>
@@ -255,12 +222,6 @@ onMounted(fetchList);
   gap: 20px;
 }
 
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
 .form-row {
   display: grid;
   gap: 8px;
@@ -296,18 +257,6 @@ onMounted(fetchList);
   outline: none;
   background: var(--bg-card);
   box-shadow: 0 0 0 4px var(--primary-border);
-}
-
-.form-row input:disabled {
-  background: #eef0f5;
-  color: #98a1b3;
-  cursor: not-allowed;
-}
-
-.field-hint {
-  margin: 0;
-  color: #98a1b3;
-  font-size: 12px;
 }
 
 .btn {

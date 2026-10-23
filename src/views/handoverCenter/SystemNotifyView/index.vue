@@ -136,12 +136,12 @@ onMounted(() => {
       <el-checkbox v-model="onlyUnread" class="only-unread-check">仅看未读</el-checkbox>
       <div class="toolbar-right">
         <span v-if="unreadCount" class="total-unread">未读 {{ unreadCount }} 条</span>
-        <button
+        <!-- <button
           class="btn btn-plain btn-sm"
           type="button"
           :disabled="!unreadCount"
           @click="handleMarkAllRead"
-        >全部已读</button>
+        >全部已读</button> -->
       </div>
     </div>
 

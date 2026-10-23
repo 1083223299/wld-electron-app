@@ -7,6 +7,7 @@ import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
 import { playerApi } from '../../../api/modules/player';
+import { clubApi } from '../../../api/modules/club';
 import { gameApi } from '../../../api/modules/game';
 import { fileApi } from '../../../api/modules/file';
 import { useUserStore } from '../../../stores/user';
@@ -42,7 +43,7 @@ const specLoading = ref(false);
 const specSaving = ref(false);
 const specLoadError = ref(false);
 const specCatalogError = ref(false); // 游戏/规格目录加载失败（与规格接口失败分开提示）
-// 游戏-规格目录：来源 gameApi.all()（当前为 mock），真实联调时规格 id 以游戏/规格列表接口返回为准
+// 游戏-规格目录：真实规格 id 取游戏列表 / 规格接口（gameApi.list + gameApi.specs）
 const specCatalog = ref([]); // [{ gameId, gameName, specs: [{ id, name }] }]
 const specGameRows = ref([]); // [{ gameId, gameName, specs, all, checked:Set<number> }]
 
@@ -50,12 +51,39 @@ const specDialogTitle = computed(() => `可接单规格 - ${currentRow.value?.na
 
 const editForm = reactive({
   name: '',
-  clubName: '',
+  clubId: null, // 所属俱乐部（下拉搜索联想，提交 clubId）
   phone: '',
-  status: '可接单',
+  password: '', // 编辑留空 = 不修改密码
   remark: '',
   files: [], // 附件 url 列表（PUT /api/admin/players/{id} files；最多5个）
 });
+
+// 所属俱乐部下拉选项（搜索联想）
+const clubOptions = ref([]);
+const clubKeyword = ref('');
+const filteredClubOptions = computed(() => {
+  const kw = clubKeyword.value.trim();
+  if (!kw) return clubOptions.value;
+  return clubOptions.value.filter(
+    (c) => (c.name || '').includes(kw) || String(c.phone || '').includes(kw),
+  );
+});
+async function loadClubOptions() {
+  if (clubOptions.value.length) return;
+  try {
+    const res = await clubApi.list({ page: 1, pageSize: 100 });
+    clubOptions.value = res.list || [];
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
+}
+
+/** 下拉搜索联想选中：按名称或手机号匹配出 clubId */
+function onClubPick() {
+  const kw = clubKeyword.value.trim();
+  const hit = clubOptions.value.find((c) => c.name === kw || String(c.phone) === kw);
+  editForm.clubId = hit ? hit.id : null;
+}
 
 const editUploading = ref(false);
 
@@ -97,7 +125,13 @@ const getAssetPlaceholder = computed(() => {
   return '请输入抵扣金额';
 });
 
-const maxUploadFiles = 5;
+const getAssetReasonLabel = computed(() => {
+  if (assetForm.operation === '充值') return '充值原因（会在C端展示）';
+  if (assetForm.operation === '扣减') return '扣减原因（会在C端展示）';
+  return '抵扣原因（会在C端展示）';
+});
+
+const maxUploadFiles = 6;
 
 const rows = ref([]);
 const total = ref(0);
@@ -170,8 +204,7 @@ function deriveStatusList(row) {
 }
 
 /** 后端列表/详情字段 → 页面行对象（余额/订单统计/钱包冻结均为接口真实字段）
- *  注意：状态三字段按后端实际语义解析（与接口文档 0/1 相反）：
- *  inStore 0=在店 / 1=退店；canTake 0=可接单 / 1=禁止接单；walletFrozen 0=未冻结 / 1=冻结 */
+ *  标志语义按接口文档：canTake 1=可接单/0=禁止接单；inStore 1=在店/0=退店；walletFrozen 1=冻结/0=解冻 */
 function mapPlayerRow(item = {}) {
   const row = {
     id: item.id,
@@ -179,9 +212,9 @@ function mapPlayerRow(item = {}) {
     clubName: item.clubName || '',
     name: item.name || '',
     phone: item.phone || '',
-    isInStore: Number(item.inStore) === 0,
-    canTake: Number(item.canTake) === 0,
-    isFrozen: Number(item.walletFrozen) === 0,
+    isInStore: Number(item.inStore) === 1,
+    canTake: Number(item.canTake) === 1,
+    isFrozen: Number(item.walletFrozen) === 1,
     statusDisabled: String(item.status || '').toUpperCase() === 'DISABLED',
     realNameVerified: Number(item.realNameVerified) === 1,
     remark: item.remark || '',
@@ -245,12 +278,14 @@ async function openEdit(row) {
   currentRow.value = row;
   Object.assign(editForm, {
     name: row.name,
-    clubName: row.clubName,
+    clubId: row.clubId ?? null,
     phone: row.phone || '',
-    status: row.status,
+    password: '',
     remark: row.remark || '',
-    files: (row.files || []).map((url) => ({ url, name: urlFileName(url) })),
+    files: normalizeEditFiles(row.files),
   });
+  clubKeyword.value = row.clubName || '';
+  loadClubOptions();
   editDialogVisible.value = true;
   // 详情回显：GET /players/{id}，含备注/文件/规格等完整字段；失败沿用行数据（错误已统一提示）
   try {
@@ -260,12 +295,13 @@ async function openEdit(row) {
     const mapped = mapPlayerRow(detail);
     Object.assign(editForm, {
       name: mapped.name,
-      clubName: mapped.clubName,
+      clubId: mapped.clubId ?? null,
       phone: mapped.phone,
-      status: mapped.status,
+      password: '',
       remark: mapped.remark,
-      files: (mapped.files || []).map((url) => ({ url, name: urlFileName(url) })),
+      files: normalizeEditFiles(mapped.files),
     });
+    clubKeyword.value = mapped.clubName;
   } catch (e) {
     /* 回显失败沿用行数据 */
   }
@@ -282,6 +318,13 @@ const urlFileName = (url = '') => {
     return name || String(url);
   }
 };
+
+/** 附件回显归一化：兼容 files 为 url 字符串数组（旧数据）或 { url, name } 对象数组（新数据） */
+const normalizeEditFiles = (files = []) =>
+  (Array.isArray(files) ? files : []).map((f) => {
+    const url = typeof f === 'string' ? f : f && f.url;
+    return { url, name: typeof f === 'string' ? urlFileName(f) : (f && f.name) || urlFileName(url) };
+  });
 
 const editFiles = computed(() =>
   (editForm.files || []).map((item, index) => {
@@ -318,8 +361,8 @@ async function handleEditFiles(event) {
   try {
     for (const file of picked.slice(0, room)) {
       const res = await fileApi.upload(file);
-      // 保留后端返回的真实文件名，避免 OSS url 无扩展名时类型判断失败（如图片显示成图标）
-      editForm.files.push({ url: res.url, name: res.fileName || file.name });
+      // 上传接口 data 返回 name/fileName/originalFilename 均为原始文件名，用 name 回显
+      editForm.files.push({ url: res.url, name: res.name || res.fileName || res.originalFilename || file.name });
     }
     show('文件已上传', 'success');
   } catch {
@@ -336,12 +379,29 @@ function removeEditFile(index) {
 async function loadSpecCatalog() {
   if (specCatalog.value.length) return;
   try {
-    const games = await gameApi.all();
-    specCatalog.value = (Array.isArray(games) ? games : []).map((game) => ({
-      gameId: game.id,
-      gameName: game.name,
-      specs: (Array.isArray(game.specs) ? game.specs : []).map((name, i) => ({ id: i + 1, name })),
-    }));
+    // 游戏列表接口已改服务端分页（返回分页对象），目录需取全量 → 用 listAll()
+    const games = await gameApi.listAll();
+    // 规格必须用真实 specId：优先游戏列表自带规格（含 id），否则按游戏拉取规格列表
+    const catalog = await Promise.all(
+      (Array.isArray(games) ? games : []).map(async (game) => {
+        let specs = [];
+        if (Array.isArray(game.specs) && game.specs.length) {
+          specs = game.specs;
+        } else {
+          try {
+            specs = await gameApi.specs(game.id);
+          } catch {
+            // 单个游戏规格拉取失败不阻塞整个目录
+          }
+        }
+        return {
+          gameId: game.id,
+          gameName: game.name,
+          specs: (specs || []).map((s) => ({ id: Number(s.id ?? s), name: s.name ?? s })),
+        };
+      }),
+    );
+    specCatalog.value = catalog;
   } catch (e) {
     // 游戏/规格目录加载失败：与规格接口失败分开提示（错误信息已由 request.js 弹出）
     specCatalogError.value = true;
@@ -436,14 +496,22 @@ function openAssetFilePicker() {
   if (input) input.click();
 }
 
-function handleAssetFiles(event) {
+async function handleAssetFiles(event) {
   const picked = Array.from(event.target.files || []);
-  const merged = [...assetForm.files, ...picked];
-  if (merged.length > maxUploadFiles) {
-    show(`最多上传 ${maxUploadFiles} 个文件`, 'warning');
-  }
-  assetForm.files = merged.slice(0, maxUploadFiles);
   event.target.value = '';
+  if (!picked.length) return;
+  const room = maxUploadFiles - assetForm.files.length;
+  if (room <= 0) return show(`最多上传 ${maxUploadFiles} 个文件`, 'warning');
+  try {
+    for (const file of picked.slice(0, room)) {
+      const res = await fileApi.upload(file);
+      // 与编辑弹窗一致：用上传接口返回的原始文件名回显
+      assetForm.files.push({ url: res.url, name: res.name || res.fileName || res.originalFilename || file.name });
+    }
+    show('文件已上传', 'success');
+  } catch {
+    /* 错误提示由 request.js 统一弹出 */
+  }
 }
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico'];
@@ -494,39 +562,30 @@ const formatFileSize = (bytes) => {
 };
 
 const assetFiles = computed(() =>
-  (assetForm.files || []).map((file, index) => {
-    const meta = getFileMeta(file);
-    const image = isImageFile(file);
+  (assetForm.files || []).map((item, index) => {
+    const name = (item && item.name) || urlFileName(item && item.url) || '';
+    const meta = getFileMeta({ name });
+    const ext = getFileExt(name);
+    const image = IMAGE_EXTS.includes(ext);
     return {
       index,
-      file,
-      name: file.name,
-      size: formatFileSize(file.size),
-      isImage: image,
-      preview: image ? getImagePreview(file) : '',
+      url: item && item.url,
+      name,
       icon: meta.icon,
       bg: `${meta.color}1f`,
+      isImage: image,
+      showName: !!name && name !== 'content' && getFileExt(name) !== '',
+      unknown: ext === '' && !!(item && item.url),
     };
   })
 );
 
 function removeAssetFile(index) {
-  const file = assetForm.files[index];
-  if (file && previewUrls.has(file)) {
-    URL.revokeObjectURL(previewUrls.get(file));
-    previewUrls.delete(file);
-  }
   assetForm.files.splice(index, 1);
 }
 
 function openAsset(row) {
   currentRow.value = row;
-  assetForm.files.forEach((file) => {
-    if (previewUrls.has(file)) {
-      URL.revokeObjectURL(previewUrls.get(file));
-      previewUrls.delete(file);
-    }
-  });
   Object.assign(assetForm, {
     assetType: '收益',
     operation: '充值',
@@ -595,14 +654,14 @@ async function triggerAction(action, row) {
   if (!ok) return;
 
   // PUT /players/{id}/flags：只传要改的字段；退店同时禁止接单
-  // 按后端实际行为：1=退店/禁止接单/钱包冻结，0=恢复在店/开启接单/钱包解冻（与接口文档 0/1 相反）
+  // 语义按接口文档：canTake 1=可接单/0=禁止；inStore 1=在店/0=退店；walletFrozen 1=冻结/0=解冻
   const flags = {
-    禁止接单: { canTake: 1 },
-    开启接单: { canTake: 0 },
-    钱包冻结: { walletFrozen: 0 },
-    钱包解冻: { walletFrozen: 1 },
-    退店: { inStore: 1 },
-    恢复在店: { inStore: 0 },
+    禁止接单: { canTake: 0 },
+    开启接单: { canTake: 1 },
+    钱包冻结: { walletFrozen: 1 },
+    钱包解冻: { walletFrozen: 0 },
+    退店: { inStore: 0 },
+    恢复在店: { inStore: 1 },
   }[action];
 
   try {
@@ -611,11 +670,11 @@ async function triggerAction(action, row) {
       show(`${action}失败：操作未通过校验`, 'error');
       return;
     }
-    // 本地同步（入参语义：1=退店/禁止/冻结，0=在店/开启/解冻）
-    if (flags.canTake !== undefined) row.canTake = flags.canTake === 0;
-    if (flags.inStore !== undefined) row.isInStore = flags.inStore === 0;
-    if (flags.walletFrozen !== undefined) row.isFrozen = flags.walletFrozen === 0;
-    if (flags.inStore === 1) row.canTake = false; // 退店同时禁止接单
+    // 本地同步（语义按接口文档）
+    if (flags.canTake !== undefined) row.canTake = flags.canTake === 1;
+    if (flags.inStore !== undefined) row.isInStore = flags.inStore === 1;
+    if (flags.walletFrozen !== undefined) row.isFrozen = flags.walletFrozen === 1;
+    if (flags.inStore === 0) row.canTake = false; // 退店同时禁止接单
     row.status = deriveStatus(row);
     row.statusList = deriveStatusList(row);
     show(`${action}成功`, 'success');
@@ -627,23 +686,30 @@ async function triggerAction(action, row) {
 
 async function submitEdit() {
   if (!currentRow.value) return;
+  const name = String(editForm.name || '').trim();
+  const phone = String(editForm.phone || '').trim();
   const remark = String(editForm.remark || '');
+  if (!name) return show('请输入打手名称', 'warning');
+  if (!/^1\d{10}$/.test(phone)) return show('请输入正确的 11 位手机号', 'warning');
+  if (editForm.clubId === null || editForm.clubId === undefined || editForm.clubId === '') {
+    return show('请选择所属俱乐部', 'warning');
+  }
   if (remark.length > 200) return show('备注不能超过200字', 'warning');
   try {
-    // PUT /api/admin/players/{id}：password 不传不改密码；remark 传空串清除；files 传空数组清除附件
-    await playerApi.update(currentRow.value.id, {
-      name: String(editForm.name || '').trim(),
-      phone: String(editForm.phone || '').trim(),
+    // PUT /api/admin/players/{id}：password 留空不改；remark 空串清除；files 传 [{url,name}]
+    const payload = {
+      name,
+      phone,
+      clubId: Number(editForm.clubId),
       remark,
-      files: editForm.files.map((f) => f.url),
-    });
-    // 本地同步展示字段（状态/俱乐部名称不在本接口范围，保持本地编辑效果）
-    currentRow.value.name = editForm.name;
-    currentRow.value.clubName = editForm.clubName;
-    currentRow.value.phone = editForm.phone;
-    currentRow.value.status = editForm.status;
-    currentRow.value.remark = editForm.remark;
-    currentRow.value.files = editForm.files.map((f) => f.url);
+      files: editForm.files.map((f) => ({ url: f.url, name: f.name })),
+    };
+    // 密码填了才提交，留空保持原密码；至少 6 位
+    if (editForm.password) {
+      if (String(editForm.password).length < 6) return show('密码至少 6 位', 'warning');
+      payload.password = editForm.password;
+    }
+    await playerApi.update(currentRow.value.id, payload);
     editDialogVisible.value = false;
     show('编辑成功', 'success');
     fetchList(); // 以服务端为准刷新列表
@@ -679,6 +745,8 @@ async function submitAsset() {
       action: ACTION_MAP[assetForm.operation],
       amount,
       reason: assetForm.reason.trim(),
+      // 凭证文件（{url,name} 对象数组），保存原始文件名供回显
+      files: assetForm.files.map((f) => ({ url: f.url, name: f.name })),
     });
     // 用服务端返回的余额回写（data: { ok, bizId, income, deposit, walletFrozen }）
     if (res) {
@@ -746,7 +814,7 @@ function pageSizeChange(size) {
         <div class="action-group">
           <button class="link-btn" @click="openEdit(row)">编辑</button>
           <button class="link-btn" @click="openAsset(row)">资产管理</button>
-          <button class="link-btn" @click="openSpecs(row)">规格</button>
+          <button class="link-btn" @click="openSpecs(row)">可接单规格</button>
 
           <button v-if="canShowAction(row, '禁止接单')" class="link-btn danger" @click="triggerAction('禁止接单', row)">
             禁止接单
@@ -777,41 +845,46 @@ function pageSizeChange(size) {
           <input v-model="editForm.name" placeholder="请输入打手名称" />
         </div>
         <div class="form-row">
-          <label>俱乐部名称</label>
-          <input v-model="editForm.clubName" placeholder="请输入俱乐部名称" />
-        </div>
-        <div class="form-row">
           <label>手机号</label>
           <input v-model="editForm.phone" placeholder="请输入手机号" />
         </div>
         <div class="form-row">
-          <label>状态</label>
-          <select v-model="editForm.status">
-            <option v-for="item in statusOptions" :key="item" :value="item">{{ item }}</option>
-          </select>
+          <label>密码</label>
+          <input v-model="editForm.password" type="password" placeholder="留空表示不修改密码，至少 6 位" autocomplete="new-password" />
         </div>
         <div class="form-row">
-          <label>备注</label>
-          <textarea v-model="editForm.remark" rows="3" maxlength="200" placeholder="请输入备注，最多200字"></textarea>
+          <label>所属俱乐部</label>
+          <input
+            v-model="clubKeyword"
+            placeholder="输入俱乐部名称 / 手机号搜索选择"
+            list="club-options"
+            @change="onClubPick"
+          />
+          <datalist id="club-options">
+            <option v-for="c in filteredClubOptions" :key="c.id" :value="c.name">{{ c.phone }}</option>
+          </datalist>
         </div>
         <div class="form-row edit-files-row">
-          <label>附件</label>
+          <label>文件(上限5组文件)</label>
           <div class="upload-box">
             <input id="edit-upload-input" type="file" multiple hidden :disabled="editUploading" @change="handleEditFiles" />
             <div class="upload-toolbar">
               <button type="button" class="upload-trigger" :disabled="editUploading" @click="openEditFilePicker">
                 {{ editUploading ? '上传中…' : '上传文件' }}
               </button>
-              <span class="upload-tip">支持任意格式文件，最多上传 {{ maxUploadFiles }} 个</span>
+              <span class="upload-tip">上限5组文件</span>
             </div>
             <div v-if="editFiles.length" class="file-list">
               <div v-for="item in editFiles" :key="`${item.name}-${item.index}`" class="file-item">
                 <template v-if="item.isImage || item.unknown">
-                  <img
+                  <el-image
                     class="file-thumb"
                     :src="item.url"
                     :alt="item.name"
+                    fit="cover"
                     v-show="!item.imgError"
+                    :preview-src-list="[item.url]"
+                    preview-teleported
                     @error="item.imgError = true"
                   />
                   <span v-show="item.imgError" class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
@@ -820,10 +893,15 @@ function pageSizeChange(size) {
                 <div class="file-info">
                   <a v-if="item.showName" class="file-name" :href="item.url" target="_blank" :title="item.name">{{ item.name }}</a>
                 </div>
+                <a v-if="!item.isImage && !item.unknown" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
                 <button type="button" class="file-remove" @click="removeEditFile(item.index)">×</button>
               </div>
             </div>
           </div>
+        </div>
+        <div class="form-row">
+          <label>备注</label>
+          <textarea v-model="editForm.remark" rows="3" maxlength="200" placeholder="请输入备注，最多200字"></textarea>
         </div>
       </div>
       <template #footer>
@@ -873,7 +951,7 @@ function pageSizeChange(size) {
         </div>
 
         <div class="asset-field-group">
-          <label class="field-label">文件</label>
+          <label class="field-label">文件(上限5组文件)</label>
           <div class="upload-box">
             <input
               id="asset-upload-input"
@@ -884,21 +962,27 @@ function pageSizeChange(size) {
             />
             <div class="upload-toolbar">
               <button type="button" class="upload-trigger" @click="openAssetFilePicker">上传文件</button>
-              <span class="upload-tip">支持任意格式文件，最多上传 {{ maxUploadFiles }} 个</span>
+              <span class="upload-tip">上限5组文件</span>
             </div>
             <div v-if="assetFiles.length" class="file-list">
               <div v-for="item in assetFiles" :key="`${item.name}-${item.index}`" class="file-item">
-                <img
-                  v-if="item.isImage"
-                  class="file-thumb"
-                  :src="item.preview"
-                  :alt="item.name"
-                />
+                <template v-if="item.isImage || item.unknown">
+                  <el-image
+                    class="file-thumb"
+                    :src="item.url"
+                    fit="cover"
+                    v-show="!item.imgError"
+                    :preview-src-list="[item.url]"
+                    preview-teleported
+                    @error="item.imgError = true"
+                  />
+                  <span v-show="item.imgError" class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
+                </template>
                 <span v-else class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
                 <div class="file-info">
-                  <span class="file-name" :title="item.name">{{ item.name }}</span>
-                  <span class="file-size">{{ item.size }}</span>
+                  <a v-if="item.showName" class="file-name" :href="item.url" target="_blank" :title="item.name">{{ item.name }}</a>
                 </div>
+                <a v-if="!item.isImage && !item.unknown" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
                 <button type="button" class="file-remove" @click="removeAssetFile(item.index)">×</button>
               </div>
             </div>
@@ -906,7 +990,7 @@ function pageSizeChange(size) {
         </div>
 
         <div class="asset-field-group">
-          <label class="field-label required">原因</label>
+          <label class="field-label required">{{ getAssetReasonLabel }}</label>
           <textarea
             v-model="assetForm.reason"
             rows="3"
@@ -964,7 +1048,7 @@ function pageSizeChange(size) {
               <div v-else class="spec-game-none">该游戏暂未配置规格</div>
             </div>
           </div>
-          <div class="spec-tip">勾选后该打手可接对应游戏规格的订单；勾选“全部规格”表示该游戏下所有规格均可接，未勾选任何规格的游戏不会提交。</div>
+          <!-- <div class="spec-tip">勾选后该打手可接对应游戏规格的订单；勾选“全部规格”表示该游戏下所有规格均可接，未勾选任何规格的游戏不会提交。</div> -->
         </template>
       </div>
       <template #footer>
@@ -1431,7 +1515,6 @@ function pageSizeChange(size) {
   width: 34px;
   height: 34px;
   border-radius: 9px;
-  object-fit: cover;
   border: 1px solid #eceef3;
   background: #f8fafc;
 }
@@ -1457,6 +1540,19 @@ function pageSizeChange(size) {
   font-size: 11px;
   color: #98a2b3;
   font-variant-numeric: tabular-nums;
+}
+
+.chip-download {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 14px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.18s ease;
+}
+.chip-download:hover {
+  color: #3563e9;
 }
 
 .file-remove {

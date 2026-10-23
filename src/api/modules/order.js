@@ -26,17 +26,29 @@ export const ORDER_STATUS = {
   CLOSED: '交易关闭',
 };
 
-/** 审核状态（列表接口用 NONE，领单大厅/详情用 UNSUBMITTED） */
+/** 审核状态（列表接口用 NONE，领单大厅/详情用 UNSUBMITTED；PASSED 为后端实际返回的"审核通过"，接口文档 526545674e0 尚未同步） */
 export const AUDIT_STATUS = {
   NONE: '未提交',
   UNSUBMITTED: '未提交',
   PENDING: '待审核',
+  PASSED: '审核通过',
   REJECTED: '已驳回',
 };
 
-/** 订单类型 */
+/** 订单主/子属性 */
+export const ATTRIBUTE = {
+  MAIN: '主订单',
+  SUB: '子订单',
+};
+
+/** 订单类型（后端确认 2026-10-22：特惠单规范码为 DISCOUNT，不是 SPECIAL）
+ * - NORMAL：常规单（不传默认常规单）
+ * - DISCOUNT：特惠单（新增/编辑/筛选的规范码；新增接口只收常规单/特惠单，SPECIAL 会被拒绝）
+ * - SPECIAL：历史兼容码（编辑接口仍收 SPECIAL/特殊单，历史订单回显用；不进入新增/筛选选项）
+ */
 export const ORDER_TYPE = {
   NORMAL: '常规单',
+  DISCOUNT: '特惠单',
   SPECIAL: '特惠单',
 };
 
@@ -69,6 +81,7 @@ export const SLOT_SOURCE = {
 
 export const statusText = (code) => ORDER_STATUS[code] || code || '—';
 export const auditText = (code) => AUDIT_STATUS[code] || code || '—';
+export const attributeText = (code) => ATTRIBUTE[code] || code || '—';
 export const typeText = (code) => ORDER_TYPE[code] || code || '—';
 export const channelText = (code) => CHANNEL_CODES[code] || code || '—';
 export const dispatchTypeText = (code) => DISPATCH_TYPE[code] || code || '—';
@@ -82,8 +95,18 @@ export const STATUS_OPTIONS = Object.entries(ORDER_STATUS)
   .filter(([value]) => value !== 'WAIT_PAY')
   .map(([value, label]) => ({ label, value }));
 
-export const AUDIT_OPTIONS = Object.entries(AUDIT_STATUS).map(([value, label]) => ({ label, value }));
-export const TYPE_OPTIONS = Object.entries(ORDER_TYPE).map(([value, label]) => ({ label, value }));
+// 审核状态筛选选项：含 PASSED（后端 2026-10-23 确认 auditStatus=PASSED 支持筛选，非法值提示"只能是未提交、待审核、已通过、已驳回"）；
+// NONE 与 UNSUBMITTED 均为"未提交"（列表接口用 NONE，领单大厅/详情用 UNSUBMITTED），下拉去重、筛选统一传 NONE
+export const AUDIT_OPTIONS = [
+  { label: '未提交', value: 'NONE' },
+  { label: '待审核', value: 'PENDING' },
+  { label: '审核通过', value: 'PASSED' },
+  { label: '已驳回', value: 'REJECTED' },
+];
+// 订单类型选项（新增/编辑/筛选共用）：排除历史兼容码 SPECIAL，避免出现两个"特惠单"选项
+export const TYPE_OPTIONS = Object.entries(ORDER_TYPE)
+  .filter(([value]) => value !== 'SPECIAL')
+  .map(([value, label]) => ({ label, value }));
 export const CHANNEL_OPTIONS = Object.entries(CHANNEL_CODES).map(([value, label]) => ({ label, value }));
 
 /* ================= 查询参数组装（空值自动剔除，数组 join 逗号） ================= */

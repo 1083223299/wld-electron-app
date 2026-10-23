@@ -8,9 +8,10 @@ import { slotSourceText, orderApi } from '../../../api/modules/order';
  * 订单详情弹窗内容（查看视图，接口联调 + 原型 UI 恢复）
  * 数据来源：GET /api/admin/orders/{id}（订单详情）+ GET /api/admin/orders/{id}/logs（订单日志）
  *   + POST /api/admin/orders/{id}/profit-details（订单分润明细）
- * - 打手信息来自 slots（名额列表：slotNo/playerId/source）
- * - 平台/俱乐部加减价为净值（减价为负）；结算到期/账期天数来自详情
- * - 分润明细：接口已提供（profit-details），未锁定（available=false）时展示提示
+ * - 打手信息来自 slots（后端已补齐 playerName/clubName/takenAt/transferredAt）；
+ *   展示规则：transferredAt 空 → 接单时间，有值 → 转单时间，转出的打手排后面
+ * - 平台/俱乐部加减价为净值（减价为负）；分润明细按原型展示加价分摊格式（如 40.12元=20.12元+20.00元）
+ * - 分润明细：接口已提供（profit-details），分润未锁定（available=false）时不展示数值（—）
  * - 存单：详情 hold 对象（form/stored/warrantyTarget/reason/rounds/shots/doneAmount/remainAmount/remark）
  * - 完成凭证：coverUrl 首图 / endUrl 尾图 / progressUrls 进程图
  */
@@ -40,10 +41,17 @@ const profitDisplay = computed(() => {
   const playerAmount = (d.shares || [])
     .filter((s) => s.ownerType === 'PLAYER')
     .reduce((sum, s) => sum + (Number(s.amount) || 0) + (Number(s.tailAmount) || 0), 0);
+  // 原型格式：工作室分润 = 基础 + 平台加价分摊（如 40.12元=20.12元+20.00元）；打手分润同理含俱乐部加价
+  const platformAdjust = Number(d.platformAdjust) || 0;
+  const clubAdjust = Number(d.clubAdjust) || 0;
   return {
     platform: money(d.platformAmount),
     club: money(d.clubAmount),
+    clubBase: money((Number(d.clubAmount) || 0) - platformAdjust),
+    clubExtra: platformAdjust > 0 ? money(platformAdjust) : null,
     player: money(playerAmount),
+    playerBase: money(playerAmount - clubAdjust),
+    playerExtra: clubAdjust > 0 ? money(clubAdjust) : null,
   };
 });
 
@@ -68,17 +76,26 @@ const clientsText = computed(() =>
   props.row.clients ? String(props.row.clients).split(/[,，]/).filter(Boolean).join('、') : '—'
 );
 
-const players = computed(() =>
-  (props.row.slots || []).map((s) => ({
+const players = computed(() => {
+  const list = (props.row.slots || []).map((s) => ({
     slotNo: s.slotNo,
     playerId: s.playerId,
+    playerName: s.playerName || '',
+    clubName: s.clubName || '',
+    clubId: s.clubId,
     source: slotSourceText(s.source),
-  }))
-);
+    takenAt: s.takenAt || '',
+    transferredAt: s.transferredAt || '',
+  }));
+  // 展示规则（后端口径）：当前在单的打手排前面（无转单时间），被转出的排后面并带转单时间
+  return list
+    .slice()
+    .sort((a, b) => (a.transferredAt ? 1 : 0) - (b.transferredAt ? 1 : 0) || a.slotNo - b.slotNo);
+});
 
-/** 存单：三角洲订单且进行中/已完成 展示（接口未返回字段，兜底展示） */
+/** 存单：三角洲订单且进行中 展示（原型：存单信息仅进行中订单下展示） */
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
-const showDeposit = computed(() => isDelta.value && ['进行中', '已完成'].includes(props.row.status));
+const showDeposit = computed(() => isDelta.value && props.row.status === '进行中');
 
 /** 完成凭证：进行中/已完成/交易关闭 展示（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） */
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
@@ -118,7 +135,7 @@ async function copyText(text) {
           <span>第三方订单号</span>
           <strong class="copyable" @click="copyText(row.thirdOrderNo)">{{ row.thirdOrderNo }}<em>复制</em></strong>
         </div>
-        <div class="kv"><span>店铺ID</span><strong>{{ row.shopId || '—' }}</strong></div>
+        <div class="kv"><span>渠道</span><strong>{{ row.channel || '—' }}</strong></div>
         <div class="kv"><span>游戏名称</span><strong>{{ row.gameName || '—' }}</strong></div>
         <div class="kv"><span>购买项目</span><strong>{{ row.product || '—' }}</strong></div>
         <div class="kv"><span>游戏规格</span><strong>{{ row.spec || '—' }}</strong></div>
@@ -139,22 +156,20 @@ async function copyText(text) {
           <strong v-if="row.roleName" class="copyable" @click="copyText(row.roleName)">{{ row.roleName }}<em>复制</em></strong>
           <strong v-else>—</strong>
         </div>
-        <div class="kv">
-          <span>主订单号</span>
-          <strong v-if="row.mainOrderNo" class="copyable" @click="copyText(row.mainOrderNo)">{{ row.mainOrderNo }}<em>复制</em></strong>
-          <strong v-else>—</strong>
-        </div>
-        <div class="kv">
-          <span>子订单</span>
-          <strong v-if="row.children && row.children.length" class="copyable" @click="copyText(row.children.map((c) => c.orderNo).join('、'))">{{ row.children.map((c) => c.orderNo).join('、') }}<em>复制</em></strong>
-          <strong v-else>—</strong>
-        </div>
-        <div class="kv"><span>创建时间</span><strong>{{ row.createTime || '—' }}</strong></div>
+        <div class="kv"><span>创单时间</span><strong>{{ row.createTime || '—' }}</strong></div>
         <div class="kv"><span>订单金额(元)</span><strong>{{ money(row.amount) }}</strong></div>
       </div>
       <div class="kv-line">
         <span>企微群二维码</span>
-        <img v-if="row.groupQrUrl" :src="row.groupQrUrl" class="qr-img" alt="企微群二维码" />
+        <el-image
+          v-if="row.groupQrUrl"
+          :src="row.groupQrUrl"
+          class="qr-img"
+          alt="企微群二维码"
+          fit="cover"
+          :preview-src-list="[row.groupQrUrl]"
+          preview-teleported
+        />
         <strong v-else class="muted-text">暂无上传</strong>
       </div>
     </section>
@@ -175,7 +190,16 @@ async function copyText(text) {
         <div class="kv-line">
           <span>剩余保底截图</span>
           <div v-if="row.hold.shots && row.hold.shots.length" class="deposit-imgs">
-            <img v-for="(img, i) in row.hold.shots" :key="i" :src="img" alt="剩余保底截图" />
+            <el-image
+              v-for="(img, i) in row.hold.shots"
+              :key="i"
+              :src="img"
+              alt="剩余保底截图"
+              fit="cover"
+              :preview-src-list="row.hold.shots"
+              :initial-index="i"
+              preview-teleported
+            />
           </div>
           <strong v-else class="muted-text">暂无上传</strong>
         </div>
@@ -184,14 +208,17 @@ async function copyText(text) {
       <p v-else class="muted-text">暂无存单数据</p>
     </section>
 
-    <!-- 打手信息（slots 名额列表；接单/转单时间字段接口未提供） -->
+    <!-- 打手信息（slots：playerName/clubName/takenAt/transferredAt 已由后端补齐；
+         展示规则：transferredAt 空 → 接单时间，有值 → 转单时间，转出的排后面） -->
     <section v-if="players.length" class="detail-section">
       <h4>打手信息</h4>
       <div class="player-grid">
         <div v-for="p in players" :key="`${p.slotNo}-${p.playerId}`" class="player-card">
-          <strong>打手ID：{{ p.playerId }}</strong>
-          <span>名额序号：{{ p.slotNo }}</span>
-          <span>来源：{{ p.source }}</span>
+          <div class="player-line">
+            <strong>{{ p.playerName || '未命名打手' }}（{{ p.playerId }}）</strong>
+            <span>{{ p.clubName || '—' }}{{ p.clubId ? `（${p.clubId}）` : '' }}</span>
+            <span class="player-time">{{ p.transferredAt ? `转单时间：${p.transferredAt}` : `接单时间：${p.takenAt || '—'}` }}</span>
+          </div>
         </div>
       </div>
     </section>
@@ -202,18 +229,18 @@ async function copyText(text) {
       <div class="kv-grid">
         <div class="kv"><span>平台加价/减价</span><strong>{{ adjustText(row.platformAdjust) }}</strong></div>
         <div class="kv"><span>俱乐部加价/减价</span><strong>{{ adjustText(row.clubAdjust) }}</strong></div>
-        <div class="kv"><span>结算到期时间</span><strong>{{ row.settleDueAt || '—' }}</strong></div>
-        <div class="kv"><span>账期天数</span><strong>{{ row.settleDaysSnapshot != null ? `${row.settleDaysSnapshot}天` : '—' }}</strong></div>
         <template v-if="profitState.loading">
-          <div class="kv"><span>分润明细</span><strong class="muted-text">加载中…</strong></div>
+          <div class="kv"><span>平台分润(元)</span><strong class="muted-text">—</strong></div>
         </template>
         <template v-else-if="profitDisplay">
           <div class="kv"><span>平台分润(元)</span><strong>{{ profitDisplay.platform }}</strong></div>
-          <div class="kv"><span>俱乐部分润(元)</span><strong>{{ profitDisplay.club }}</strong></div>
-          <div class="kv"><span>打手分润(元)</span><strong>{{ profitDisplay.player }}</strong></div>
+          <div class="kv"><span>工作室分润(元)</span><strong>{{ profitDisplay.clubExtra ? `${profitDisplay.club}元=${profitDisplay.clubBase}元+${profitDisplay.clubExtra}元` : profitDisplay.club }}</strong></div>
+          <div class="kv"><span>打手分润(元)</span><strong>{{ profitDisplay.playerExtra ? `${profitDisplay.player}元=${profitDisplay.playerBase}元+${profitDisplay.playerExtra}元` : profitDisplay.player }}</strong></div>
         </template>
         <template v-else>
-          <div class="kv"><span>分润明细</span><strong class="muted-text">{{ profitState.error || '分润未锁定' }}</strong></div>
+          <div class="kv"><span>平台分润(元)</span><strong class="muted-text">—</strong></div>
+          <div class="kv"><span>工作室分润(元)</span><strong class="muted-text">—</strong></div>
+          <div class="kv"><span>打手分润(元)</span><strong class="muted-text">—</strong></div>
         </template>
       </div>
     </section>
@@ -237,27 +264,50 @@ async function copyText(text) {
       <div v-if="hasProof" class="proof-grid">
         <div class="proof-box">
           <span>首图</span>
-          <img v-if="row.proofFirst" :src="row.proofFirst" alt="首图" />
+          <el-image
+            v-if="row.proofFirst"
+            :src="row.proofFirst"
+            alt="首图"
+            fit="contain"
+            :preview-src-list="[row.proofFirst]"
+            preview-teleported
+          />
           <em v-else>未上传</em>
           <em v-if="row.proofFirst">{{ row.proofUploadTime }} 上传</em>
         </div>
         <div class="proof-box">
           <span>尾图</span>
-          <img v-if="row.proofLast" :src="row.proofLast" alt="尾图" />
+          <el-image
+            v-if="row.proofLast"
+            :src="row.proofLast"
+            alt="尾图"
+            fit="contain"
+            :preview-src-list="[row.proofLast]"
+            preview-teleported
+          />
           <em v-else>未上传</em>
           <em v-if="row.proofLast">{{ row.proofUploadTime }} 上传</em>
         </div>
         <div class="proof-box">
           <span>进程图</span>
           <div v-if="row.proofProcess && row.proofProcess.length" class="proof-imgs">
-            <img v-for="(img, i) in row.proofProcess" :key="i" :src="img" alt="进程图" />
+            <el-image
+              v-for="(img, i) in row.proofProcess"
+              :key="i"
+              :src="img"
+              alt="进程图"
+              fit="cover"
+              :preview-src-list="row.proofProcess"
+              :initial-index="i"
+              preview-teleported
+            />
           </div>
           <em v-else>未上传</em>
           <em v-if="row.proofProcess && row.proofProcess.length">{{ row.proofUploadTime }} 上传</em>
         </div>
       </div>
       <div v-else class="muted-text">暂无数据</div>
-      <div v-if="row.playerRemark" class="kv-line"><span>陪玩备注</span><strong>{{ row.playerRemark }}</strong></div>
+      <div v-if="row.playerRemark" class="kv-line"><span>打手备注</span><strong>{{ row.playerRemark }}</strong></div>
       <div v-if="row.lastRejectReason" class="kv-line"><span>上次驳回原因</span><strong class="reject-text">{{ row.lastRejectReason }}</strong></div>
     </section>
 
@@ -386,7 +436,6 @@ async function copyText(text) {
 .qr-img {
   width: 96px;
   height: 72px;
-  object-fit: cover;
   border-radius: 8px;
   border: 1px solid var(--border);
 }
@@ -397,10 +446,9 @@ async function copyText(text) {
   flex-wrap: wrap;
 }
 
-.deposit-imgs img {
+.deposit-imgs .el-image {
   width: 72px;
   height: 54px;
-  object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -425,6 +473,25 @@ async function copyText(text) {
 .player-card strong {
   color: var(--text-main);
   font-size: 13px;
+}
+
+/* 打手卡片一行三段：姓名（ID）｜俱乐部（ID）｜接单/转单时间 */
+.player-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.player-line strong::after {
+  content: '｜';
+  margin-left: 8px;
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.player-time {
+  color: var(--text-faint);
 }
 
 .log-list {
@@ -489,10 +556,9 @@ async function copyText(text) {
   color: var(--text-main);
 }
 
-.proof-box img {
+.proof-box .el-image {
   max-width: 100%;
   max-height: 90px;
-  object-fit: contain;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -510,9 +576,8 @@ async function copyText(text) {
   justify-content: center;
 }
 
-.proof-imgs img {
+.proof-imgs .el-image {
   width: 64px;
   height: 48px;
-  object-fit: cover;
 }
 </style>

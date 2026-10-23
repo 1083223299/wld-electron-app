@@ -1,7 +1,7 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
-import { TYPE_OPTIONS, slotSourceText } from '../../../api/modules/order';
+import { TYPE_OPTIONS, slotSourceText, orderApi } from '../../../api/modules/order';
 import { fileApi } from '../../../api/modules/file';
 import { CLIENT_OPTIONS, STATUS_CLASS } from './mockData';
 
@@ -13,9 +13,9 @@ import { CLIENT_OPTIONS, STATUS_CLASS } from './mockData';
  *          / groupQrUrl（企业群二维码；先 fileApi.upload 拿 url 再提交；传空串清除，不传保持原值）
  * - 所属客服（领取人）：本弹窗只读展示，不在此修改；修改入口在列表「领取人」列行内铅笔，
  *   独立弹窗调 PUT /{id}/owner（仅管理员）
- * - 仍缺（保留原型 UI，本地展示/编辑、提交不携带）：存单（hold）、完成凭证、陪玩备注等
- *   后端详情已返回、可回显；但维护订单信息接口（POST /{id}/maintain）不携带这些字段，故编辑不提交
- * - 打手信息来自 slots（名额列表：slotNo/playerId/source），接单/转单时间字段接口未提供
+ * - 分润信息：POST /api/admin/orders/{id}/profit-details（未接单/分润未锁定时不展示数值）
+ * - 打手信息来自 slots（后端已补齐 playerName/clubName/takenAt/transferredAt）；
+ *   展示规则：transferredAt 空 → 接单时间，有值 → 转单时间，转出的打手排后面
  */
 const props = defineProps({
   row: { type: Object, required: true },
@@ -38,16 +38,61 @@ const specOptions = computed(() => {
 const isProgress = computed(() => props.row.status === '进行中');
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
+
+/* ===== 分润信息（POST /api/admin/orders/{id}/profit-details；未接单/未锁定时不展示数值） ===== */
+const profitState = reactive({ loading: false, data: null });
+
+const split = computed(() => {
+  const d = profitState.data;
+  if (!d || d.available === false) return null;
+  const playerAmount = (d.shares || [])
+    .filter((s) => s.ownerType === 'PLAYER')
+    .reduce((sum, s) => sum + (Number(s.amount) || 0) + (Number(s.tailAmount) || 0), 0);
+  const platformAdjust = Number(d.platformAdjust) || 0;
+  const clubAdjust = Number(d.clubAdjust) || 0;
+  return {
+    platform: money(d.platformAmount),
+    club: money(d.clubAmount),
+    clubBase: money((Number(d.clubAmount) || 0) - platformAdjust),
+    clubExtra: platformAdjust > 0 ? money(platformAdjust) : null,
+    player: money(playerAmount),
+    playerBase: money(playerAmount - clubAdjust),
+    playerExtra: clubAdjust > 0 ? money(clubAdjust) : null,
+  };
+});
+
+async function loadProfit() {
+  if (!props.row.id) return;
+  profitState.loading = true;
+  try {
+    profitState.data = await orderApi.profitDetail(props.row.id);
+  } catch {
+    /* 分润明细加载失败时保持为空（展示 —） */
+  } finally {
+    profitState.loading = false;
+  }
+}
+
+onMounted(loadProfit);
 /* 已退款订单不允许修改金额（接口约束） */
 const isRefunded = computed(() => !!props.row.refunded || Number(props.row.refundedAmount) > 0);
 
-const players = computed(() =>
-  (props.row.slots || []).map((s) => ({
+const players = computed(() => {
+  const list = (props.row.slots || []).map((s) => ({
     slotNo: s.slotNo,
     playerId: s.playerId,
+    playerName: s.playerName || '',
+    clubName: s.clubName || '',
+    clubId: s.clubId,
     source: slotSourceText(s.source),
-  }))
-);
+    takenAt: s.takenAt || '',
+    transferredAt: s.transferredAt || '',
+  }));
+  // 展示规则（后端口径）：当前在单的打手排前面（无转单时间），被转出的排后面并带转单时间
+  return list
+    .slice()
+    .sort((a, b) => (a.transferredAt ? 1 : 0) - (b.transferredAt ? 1 : 0) || a.slotNo - b.slotNo);
+});
 
 /** 加减价净值展示：减价为负 */
 const adjustText = (value) => {
@@ -87,7 +132,7 @@ watch(
       gameId: row.gameId ?? '',
       specId: row.specId ?? '',
       clients: row.clients ? String(row.clients).split(/[,，]/).filter(Boolean) : [],
-      orderType: row.orderTypeCode || 'NORMAL',
+      orderType: row.orderTypeCode === 'SPECIAL' ? 'DISCOUNT' : (row.orderTypeCode || 'NORMAL'), // 历史 SPECIAL 归一化为规范码 DISCOUNT
       playerCount: row.playerCount != null ? Number(row.playerCount) : 1,
       roleName: row.roleName || '',
       teamCode: row.teamCode || row.groupCode || '',
@@ -229,6 +274,7 @@ defineExpose({ submit });
           <label>第三方订单号</label>
           <div class="copy-field">
             <span class="readonly">{{ row.thirdOrderNo }}</span>
+            <span v-if="row.channel" class="channel-tag">{{ row.channel }}</span>
             <button type="button" class="copy-btn" @click="copyText(row.thirdOrderNo)">复制</button>
           </div>
         </div>
@@ -243,21 +289,20 @@ defineExpose({ submit });
           <span class="readonly">{{ row.product || '—' }}</span>
         </div>
         <div class="form-row">
+          <label>订单状态</label>
+          <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ row.status }}</span>
+        </div>
+        <div class="form-row">
+          <label>角色名</label>
+          <div class="copy-field">
+            <input v-model="form.roleName" placeholder="请输入角色名" />
+            <button type="button" class="copy-btn" @click="copyText(form.roleName)">复制</button>
+          </div>
+        </div>
+        <div class="form-row">
           <label>游戏规格</label>
           <el-select v-model="form.specId" placeholder="请选择规格" style="width: 100%">
             <el-option v-for="item in specOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-        </div>
-        <div class="form-row">
-          <label>订单类型</label>
-          <el-radio-group v-model="form.orderType">
-            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
-          </el-radio-group>
-        </div>
-        <div class="form-row">
-          <label>客户端</label>
-          <el-select v-model="form.clients" multiple placeholder="支持多选" style="width: 100%">
-            <el-option v-for="item in CLIENT_OPTIONS" :key="item" :label="item" :value="item" />
           </el-select>
         </div>
         <div class="form-row">
@@ -265,8 +310,10 @@ defineExpose({ submit });
           <input v-model.number="form.playerCount" type="number" min="0" step="1" placeholder="仅支持输入整数" />
         </div>
         <div class="form-row">
-          <label>订单状态</label>
-          <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ row.status }}</span>
+          <label>客户端</label>
+          <el-select v-model="form.clients" multiple placeholder="支持多选" style="width: 100%">
+            <el-option v-for="item in CLIENT_OPTIONS" :key="item" :label="item" :value="item" />
+          </el-select>
         </div>
         <div class="form-row">
           <label>组队码</label>
@@ -277,14 +324,13 @@ defineExpose({ submit });
           </div>
         </div>
         <div class="form-row">
-          <label>角色名</label>
-          <div class="copy-field">
-            <input v-model="form.roleName" placeholder="请输入角色名" />
-            <button type="button" class="copy-btn" @click="copyText(form.roleName)">复制</button>
-          </div>
+          <label>订单类型</label>
+          <el-radio-group v-model="form.orderType">
+            <el-radio v-for="item in TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
+          </el-radio-group>
         </div>
         <div class="form-row">
-          <label>创建时间</label>
+          <label>创单时间</label>
           <span class="readonly">{{ row.createTime || '—' }}</span>
         </div>
         <div class="form-row">
@@ -304,7 +350,15 @@ defineExpose({ submit });
         <label>企业群二维码</label>
         <!-- groupQrUrl：先 fileApi.upload 拿 url，随 maintain 提交；传空串清除 -->
         <div class="upload-box">
-          <img v-if="form.groupQrUrl" :src="form.groupQrUrl" class="upload-thumb" alt="企业群二维码" />
+          <el-image
+            v-if="form.groupQrUrl"
+            :src="form.groupQrUrl"
+            class="upload-thumb"
+            alt="企业群二维码"
+            fit="cover"
+            :preview-src-list="[form.groupQrUrl]"
+            preview-teleported
+          />
           <span v-else class="upload-empty">未上传</span>
           <label class="upload-btn" :class="{ disabled: qrUploading }">
             {{ qrUploading ? '上传中…' : '上传图片' }}
@@ -342,7 +396,14 @@ defineExpose({ submit });
           <div class="upload-box">
             <div class="upload-list">
               <div v-for="(img, i) in form.depositImages" :key="i" class="upload-item">
-                <img :src="img" alt="剩余保底截图" />
+                <el-image
+                  :src="img"
+                  alt="剩余保底截图"
+                  fit="cover"
+                  :preview-src-list="form.depositImages"
+                  :initial-index="i"
+                  preview-teleported
+                />
                 <button type="button" class="upload-item-remove" @click="removeDeposit(i)">✕</button>
               </div>
             </div>
@@ -357,31 +418,43 @@ defineExpose({ submit });
         <label>存单备注</label>
         <textarea v-model="form.depositRemark" class="remark-area" rows="3" maxlength="200" placeholder="非三角洲订单展示，上限200字"></textarea>
       </div>
-      <p class="form-tip">存单字段（hold：保底目标/各把金额/截图等）后端详情已返回可回显；维护订单信息接口不携带，编辑保存不提交。</p>
+      <!-- <p class="form-tip">存单字段（hold：保底目标/各把金额/截图等）后端详情已返回可回显；维护订单信息接口不携带，编辑保存不提交。</p> -->
     </section>
 
-    <!-- 打手信息（slots 名额列表；接单/转单时间字段接口未提供） -->
-    <section v-if="row.status === '待派单' || players.length" class="edit-section">
+    <!-- 打手信息（slots：playerName/clubName/takenAt/transferredAt 已由后端补齐；
+         展示规则：transferredAt 空 → 接单时间，有值 → 转单时间，转出的排后面） -->
+    <section v-if="players.length" class="edit-section">
       <h4>打手信息</h4>
-      <p v-if="row.status === '待派单'" class="muted-text">接单后价值</p>
-      <div v-else class="player-grid">
+      <div class="player-grid">
         <div v-for="p in players" :key="`${p.slotNo}-${p.playerId}`" class="player-card">
-          <strong>打手ID：{{ p.playerId }}</strong>
-          <span>名额序号：{{ p.slotNo }}</span>
-          <span>来源：{{ p.source }}</span>
+          <div class="player-line">
+            <strong>{{ p.playerName || '未命名打手' }}（{{ p.playerId }}）</strong>
+            <span>{{ p.clubName || '—' }}{{ p.clubId ? `（${p.clubId}）` : '' }}</span>
+            <span class="player-time">{{ p.transferredAt ? `转单时间：${p.transferredAt}` : `接单时间：${p.takenAt || '—'}` }}</span>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- 分成信息 -->
+    <!-- 分润信息（POST /api/admin/orders/{id}/profit-details；未接单/未锁定时不展示数值） -->
     <section class="edit-section">
-      <h4>分成信息</h4>
+      <h4>分润信息</h4>
       <div class="grid-2">
         <div class="kv"><span>平台加价/减价</span><strong>{{ adjustText(row.platformAdjust) }}</strong></div>
         <div class="kv"><span>俱乐部加价/减价</span><strong>{{ adjustText(row.clubAdjust) }}</strong></div>
-        <div class="kv"><span>工作室分成(元)</span><strong>接单后价值（分润明细接口待补充）</strong></div>
-        <div class="kv"><span>平台分成(元)</span><strong>接单后价值（分润明细接口待补充）</strong></div>
-        <div class="kv"><span>打手分成(元)</span><strong>接单后价值（分润明细接口待补充）</strong></div>
+        <template v-if="profitState.loading">
+          <div class="kv"><span>平台分润(元)</span><strong class="muted-text">—</strong></div>
+        </template>
+        <template v-else-if="split">
+          <div class="kv"><span>平台分润(元)</span><strong>{{ split.platform }}</strong></div>
+          <div class="kv"><span>工作室分润(元)</span><strong>{{ split.clubExtra ? `${split.club}元=${split.clubBase}元+${split.clubExtra}元` : split.club }}</strong></div>
+          <div class="kv"><span>打手分润(元)</span><strong>{{ split.playerExtra ? `${split.player}元=${split.playerBase}元+${split.playerExtra}元` : split.player }}</strong></div>
+        </template>
+        <template v-else>
+          <div class="kv"><span>平台分润(元)</span><strong class="muted-text">—</strong></div>
+          <div class="kv"><span>工作室分润(元)</span><strong class="muted-text">—</strong></div>
+          <div class="kv"><span>打手分润(元)</span><strong class="muted-text">—</strong></div>
+        </template>
       </div>
     </section>
 
@@ -398,26 +471,49 @@ defineExpose({ submit });
       <p v-else class="muted-text">暂无日志</p>
     </section>
 
-    <!-- 完成凭证（字段接口未提供，兜底展示） -->
+    <!-- 完成凭证（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回；只读展示） -->
     <section class="edit-section">
       <h4>完成凭证</h4>
       <div v-if="hasProof" class="proof-grid">
         <div class="proof-box">
           <span>首图</span>
-          <img v-if="row.proofFirst" :src="row.proofFirst" alt="首图" />
+          <el-image
+            v-if="row.proofFirst"
+            :src="row.proofFirst"
+            alt="首图"
+            fit="contain"
+            :preview-src-list="[row.proofFirst]"
+            preview-teleported
+          />
           <em v-else>未上传</em>
           <em v-if="row.proofFirst">{{ row.proofUploadTime }} 上传</em>
         </div>
         <div class="proof-box">
           <span>尾图</span>
-          <img v-if="row.proofLast" :src="row.proofLast" alt="尾图" />
+          <el-image
+            v-if="row.proofLast"
+            :src="row.proofLast"
+            alt="尾图"
+            fit="contain"
+            :preview-src-list="[row.proofLast]"
+            preview-teleported
+          />
           <em v-else>未上传</em>
           <em v-if="row.proofLast">{{ row.proofUploadTime }} 上传</em>
         </div>
         <div class="proof-box">
           <span>进程图</span>
           <div v-if="row.proofProcess && row.proofProcess.length" class="proof-imgs">
-            <img v-for="(img, i) in row.proofProcess" :key="i" :src="img" alt="进程图" />
+            <el-image
+              v-for="(img, i) in row.proofProcess"
+              :key="i"
+              :src="img"
+              alt="进程图"
+              fit="cover"
+              :preview-src-list="row.proofProcess"
+              :initial-index="i"
+              preview-teleported
+            />
           </div>
           <em v-else>未上传</em>
           <em v-if="row.proofProcess && row.proofProcess.length">{{ row.proofUploadTime }} 上传</em>
@@ -587,6 +683,17 @@ defineExpose({ submit });
   min-width: 0;
 }
 
+/* 渠道首字标签（原型：第三方订单号旁展示渠道首拼，如「抖」） */
+.channel-tag {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
 .copy-field input {
   flex: 1;
   min-width: 0;
@@ -657,7 +764,6 @@ defineExpose({ submit });
 .upload-thumb {
   width: 96px;
   height: 72px;
-  object-fit: cover;
   border-radius: 8px;
   border: 1px solid var(--border);
 }
@@ -703,10 +809,9 @@ defineExpose({ submit });
   height: 54px;
 }
 
-.upload-item img {
+.upload-item .el-image {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -761,6 +866,25 @@ defineExpose({ submit });
   border: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-sub);
+}
+
+/* 打手卡片一行三段：姓名（ID）｜俱乐部（ID）｜接单/转单时间 */
+.player-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.player-line strong::after {
+  content: '｜';
+  margin-left: 8px;
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.player-time {
+  color: var(--text-faint);
 }
 
 .player-card strong {
@@ -830,10 +954,9 @@ defineExpose({ submit });
   color: var(--text-main);
 }
 
-.proof-box img {
+.proof-box .el-image {
   max-width: 100%;
   max-height: 90px;
-  object-fit: contain;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -851,10 +974,9 @@ defineExpose({ submit });
   justify-content: center;
 }
 
-.proof-imgs img {
+.proof-imgs .el-image {
   width: 64px;
   height: 48px;
-  object-fit: cover;
 }
 
 .char-count {

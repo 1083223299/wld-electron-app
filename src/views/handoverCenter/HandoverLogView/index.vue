@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useUserStore } from '../../../stores/user';
 import { handoverApi, LOG_STATUS } from '../../../api/modules/handover';
 import { useToast } from '../../../composables/useToast';
@@ -58,9 +58,11 @@ const pageSize = ref(20); // 接口默认 20，最大 100
 const total = ref(0);
 
 // 由接口原始字段计算卡片展示字段（watchers 处理明细 → 整体状态）
-function decorate(item) {
+// candidatesCount：全部候选关注人数量；watchers 覆盖全部候选时按原型聚合展示为「@所有人」
+function decorate(item, candidatesCount = 0) {
   const watchers = item.watchers || [];
   const doneCount = watchers.filter((w) => w.status === LOG_STATUS.DONE).length;
+  const allWatched = candidatesCount > 0 && watchers.length >= candidatesCount;
   return {
     ...item,
     doneCount,
@@ -69,7 +71,8 @@ function decorate(item) {
       watchers.length > 0 && doneCount === watchers.length
         ? LOG_STATUS.DONE
         : LOG_STATUS.PENDING,
-    watcherNames: watchers.map((w) => w.accountName),
+    allWatched,
+    watcherNames: allWatched ? [] : watchers.map((w) => w.accountName),
   };
 }
 
@@ -86,7 +89,9 @@ async function loadList() {
       mine: relatedToMe.value ? 1 : '', // 传 1 仅看与我相关；空值自动剔除
     });
     total.value = res.total || 0;
-    list.value = (res.list || []).map(decorate);
+    list.value = (res.list || []).map((item) =>
+      decorate(item, watcherOptions.value.length)
+    );
   } finally {
     loading.value = false;
   }
@@ -151,6 +156,11 @@ const createForm = reactive({
 
 // 关注人候选（账号列表）
 const watcherOptions = ref([]);
+
+// 候选加载完成后重新装饰已加载列表（watchers 覆盖全部候选时按原型聚合展示为「@所有人」）
+watch(watcherOptions, (opts) => {
+  list.value = list.value.map((item) => decorate(item, opts.length));
+});
 
 async function loadAccounts() {
   try {
@@ -270,12 +280,17 @@ onMounted(() => {
         <div class="card-footer">
           <div class="watchers">
             <span class="field-label">关注人：</span>
-            <span
-              v-for="w in item.watchers"
-              :key="w.accountId"
-              class="watcher-tag"
-            >@{{ w.accountName }}</span>
-            <span v-if="!item.watchers?.length" class="field-empty">无</span>
+            <template v-if="item.allWatched">
+              <span class="watcher-tag">@所有人</span>
+            </template>
+            <template v-else>
+              <span
+                v-for="w in item.watchers"
+                :key="w.accountId"
+                class="watcher-tag"
+              >@{{ w.accountName }}</span>
+              <span v-if="!item.watchers?.length" class="field-empty">无</span>
+            </template>
           </div>
           <div class="card-actions">
             <button

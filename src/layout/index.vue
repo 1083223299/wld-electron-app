@@ -23,6 +23,9 @@
         </div>
 
         <div class="business-actions">
+          <ThemePanel />
+          <SettingsPanel />
+
           <button
             class="notice-chip"
             :class="{ shaking: bellShaking }"
@@ -49,6 +52,31 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+
+          <div class="window-controls">
+            <button class="win-btn" type="button" title="最小化" @click="minimize">
+              <svg viewBox="0 0 12 12" width="12" height="12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2" /></svg>
+            </button>
+            <button
+              class="win-btn"
+              type="button"
+              :title="isMaximized ? '还原' : '最大化'"
+              @click="toggleMaximize"
+            >
+              <svg v-if="!isMaximized" viewBox="0 0 12 12" width="12" height="12">
+                <rect x="2.4" y="2.4" width="7.2" height="7.2" fill="none" stroke="currentColor" stroke-width="1.2" />
+              </svg>
+              <svg v-else viewBox="0 0 12 12" width="12" height="12">
+                <rect x="2.2" y="3.4" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2" />
+                <path d="M4 3.4V2.2h6v6H8.8" fill="none" stroke="currentColor" stroke-width="1.2" />
+              </svg>
+            </button>
+            <button class="win-btn close" type="button" title="关闭" @click="closeWindow">
+              <svg viewBox="0 0 12 12" width="12" height="12">
+                <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.2" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -58,13 +86,15 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useUserStore } from '../stores/user';
 import { useNotifyStore } from '../stores/notify';
 import Sidebar from './components/Sidebar.vue';
 import AppMain from './components/AppMain.vue';
+import ThemePanel from '../components/ThemePanel.vue';
+import SettingsPanel from '../components/SettingsPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -105,6 +135,33 @@ const breadcrumbs = computed(() => {
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
 }
+
+/* ================= 窗口控制（桌面端顶栏） ================= */
+const winControls = window.windowControls;
+const isMaximized = ref(false);
+let offMaximizeChange = null;
+
+function minimize() {
+  winControls && winControls.minimize();
+}
+function toggleMaximize() {
+  winControls && winControls.toggleMaximize();
+}
+function closeWindow() {
+  winControls && winControls.close();
+}
+
+onMounted(() => {
+  if (winControls && winControls.onMaximizeChange) {
+    offMaximizeChange = winControls.onMaximizeChange((value) => {
+      isMaximized.value = value;
+    });
+  }
+});
+
+onBeforeUnmount(() => {
+  if (offMaximizeChange) offMaximizeChange();
+});
 
 function handleCommand(command) {
   if (command === 'logout') {
@@ -153,6 +210,8 @@ function handleCommand(command) {
   padding: 0 20px 0 18px;
   background: var(--bg-topbar);
   border-bottom: 1px solid var(--border-soft);
+  -webkit-app-region: drag; /* 顶栏空白区域可拖动窗口 */
+  user-select: none;
 }
 
 .collapse-btn {
@@ -168,6 +227,7 @@ function handleCommand(command) {
   cursor: pointer;
   transition: all 0.2s ease;
   margin-right: 12px;
+  -webkit-app-region: no-drag;
 }
 
 .collapse-btn:hover {
@@ -218,6 +278,40 @@ function handleCommand(command) {
   align-items: center;
   gap: 14px;
   margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+/* ================= 窗口控制按钮 ================= */
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  margin-left: 6px;
+  border-left: 1px solid var(--border-soft);
+  padding-left: 2px;
+}
+
+.win-btn {
+  width: 40px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.win-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-main);
+}
+
+.win-btn.close:hover {
+  background: var(--danger);
+  color: #fff;
 }
 
 .user {

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useListMemory } from '../../../composables/useListMemory';
@@ -9,8 +9,12 @@ import { withdrawalApi } from '../../../api/modules/withdrawal';
  * 财务管理 > 提现明细
  * 接口：GET /api/admin/finance/withdrawals（服务端分页/筛选）
  * - 顶部「收益 / 押金」Tab → walletType: INCOME / DEPOSIT
- * - 搜索区：关键词(账号昵称或手机号)、俱乐部ID、身份、状态、提交时间
+ * - 搜索区（按原型）：用户ID、用户名称、俱乐部ID、俱乐部名称、身份、收支类型、提交时间（无状态筛选）
+ * - 列表（按原型）：身份/账号ID/账号昵称/支付宝账号(仅收益Tab)/提现金额(元)/状态/原因/提交时间
  * - 状态：PROCESSING(处理中) / SUCCESS(打款成功) / FAILED(打款失败)，一期自动打款无待审核
+ * - 收支类型：后端口径无 bizType（提现记录无业务码），「收支类型」筛选绑 walletType（INCOME 收益 / DEPOSIT 押金），
+ *   与顶部 Tab 同语义；筛选选中时以筛选为准，未选时回落到 Tab 值
+ * - userId / clubName 参数后端已补（2026-10-23 后端确认），空值不传
  */
 
 // ===== Tab 切换（映射 walletType 参数） =====
@@ -21,12 +25,14 @@ const tabOptions = [
 ];
 const walletTypeByTab = { income: 'INCOME', deposit: 'DEPOSIT' };
 
-// ===== 筛选条件 =====
+// ===== 筛选条件（按原型：用户ID/用户名称/俱乐部ID/俱乐部名称/身份/收支类型/提交时间，无状态筛选） =====
 const filter = reactive({
+  userId: '',    // 用户ID（后端已补 Query）
   keyword: '',   // 账号昵称或手机号
   clubId: '',
+  clubName: '',  // 俱乐部名称（后端已补 Query）
   ownerType: '', // CLUB / PLAYER
-  status: '',    // PROCESSING / SUCCESS / FAILED
+  walletType: '', // 收支类型（收益/押金，绑 walletType；选空回落 Tab）
   timeRange: [], // [from, to]，格式 YYYY-MM-DD HH:mm:ss
 });
 
@@ -35,10 +41,10 @@ const OWNER_TYPE_OPTIONS = [
   { label: '打手', value: 'PLAYER' },
 ];
 
-const STATUS_OPTIONS = [
-  { label: '处理中', value: 'PROCESSING' },
-  { label: '打款成功', value: 'SUCCESS' },
-  { label: '打款失败', value: 'FAILED' },
+// 收支类型选项：后端口径无 bizType，绑 walletType（与顶部 Tab 同语义）
+const WALLET_TYPE_OPTIONS = [
+  { label: '收益', value: 'INCOME' },
+  { label: '押金', value: 'DEPOSIT' },
 ];
 
 const STATUS_MAP = {
@@ -50,15 +56,17 @@ const STATUS_MAP = {
 const OWNER_TYPE_TEXT = { CLUB: '俱乐部', PLAYER: '打手' };
 
 const searchFields = [
-  { prop: 'keyword', label: '关键词', type: 'input', placeholder: '账号昵称或手机号' },
+  { prop: 'userId', label: '用户ID', type: 'input', placeholder: '请输入用户ID' },
+  { prop: 'keyword', label: '用户名称', type: 'input', placeholder: '账号昵称或手机号' },
   { prop: 'clubId', label: '俱乐部ID', type: 'input', placeholder: '请输入俱乐部ID' },
+  { prop: 'clubName', label: '俱乐部名称', type: 'input', placeholder: '请输入俱乐部名称' },
   {
     prop: 'ownerType', label: '身份', type: 'select', placeholder: '请选择身份',
     options: [{ label: '全部', value: '' }, ...OWNER_TYPE_OPTIONS],
   },
   {
-    prop: 'status', label: '状态', type: 'select', placeholder: '请选择状态',
-    options: [{ label: '全部', value: '' }, ...STATUS_OPTIONS],
+    prop: 'walletType', label: '收支类型', type: 'select', placeholder: '请选择收支类型',
+    options: [{ label: '全部', value: '' }, ...WALLET_TYPE_OPTIONS],
   },
   {
     prop: 'timeRange', label: '提交时间', type: 'daterange',
@@ -73,7 +81,7 @@ const searchFields = [
 
 // ===== 分页与列表记忆 =====
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['keyword', 'clubId', 'ownerType', 'status', 'timeRange'],
+  filterKeys: ['userId', 'keyword', 'clubId', 'clubName', 'ownerType', 'walletType', 'timeRange'],
 });
 restoreFilter(filter);
 
@@ -92,10 +100,11 @@ async function fetchList() {
       from: range[0] || '',
       to: range[1] || '',
       ownerType: filter.ownerType,
-      walletType: walletTypeByTab[activeTab.value],
+      walletType: filter.walletType || walletTypeByTab[activeTab.value],
+      userId: filter.userId,
       keyword: filter.keyword,
       clubId: filter.clubId,
-      status: filter.status,
+      clubName: filter.clubName,
     });
     rows.value = (res && res.list) || [];
     total.value = (res && res.total) || 0;
@@ -142,17 +151,26 @@ function pageSizeChange(size) {
   fetchList();
 }
 
-// ===== 表格列 =====
-const columns = [
-  { key: 'ownerType', title: '身份' },
-  { key: 'accountId', title: '账号ID' },
-  { key: 'accountName', title: '账号昵称' },
-  { key: 'alipayAccount', title: '支付宝账号' },
-  { key: 'amount', title: '提现金额(元)' },
-  { key: 'status', title: '状态' },
-  { key: 'failReason', title: '原因' },
-  { key: 'submittedAt', title: '提交时间' },
-];
+// ===== 表格列（与原型「提现明细」截图一致） =====
+// 收益 Tab：身份/账号ID/账号昵称/支付宝账号/提现金额(元)/状态/原因/提交时间
+// 押金 Tab：原型无支付宝账号列
+const columns = computed(() => {
+  const base = [
+    { key: 'ownerType', title: '身份' },
+    { key: 'accountId', title: '账号ID' },
+    { key: 'accountName', title: '账号昵称' },
+  ];
+  if (activeTab.value === 'income') {
+    base.push({ key: 'alipayAccount', title: '支付宝账号' });
+  }
+  base.push(
+    { key: 'amount', title: '提现金额(元)' },
+    { key: 'status', title: '状态' },
+    { key: 'failReason', title: '原因' },
+    { key: 'submittedAt', title: '提交时间' },
+  );
+  return base;
+});
 
 const money = (value) => (Number(value) || 0).toFixed(2);
 const ownerTypeText = (value) => OWNER_TYPE_TEXT[value] || value || '—';
@@ -178,7 +196,7 @@ const ownerTypeText = (value) => OWNER_TYPE_TEXT[value] || value || '—';
         :fields="searchFields"
         :initial-values="filter"
         :row-columns="4"
-        :label-width="80"
+        :label-width="90"
         :confirm-reset="false"
         @search="handleSearch"
         @reset="handleReset"

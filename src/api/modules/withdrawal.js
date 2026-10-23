@@ -14,7 +14,8 @@ export const withdrawalApi = {
    * 参数以接口契约为准，空值自动剔除
    * @param {object} params
    *   { page, pageSize, from, to, ownerType: 'CLUB'|'PLAYER',
-   *     walletType: 'INCOME'|'DEPOSIT', keyword: 账号昵称或手机号, clubId, status: 'PROCESSING'|'SUCCESS'|'FAILED' }
+   *     walletType: 'INCOME'|'DEPOSIT', userId, keyword: 账号昵称或手机号, clubId, clubName,
+   *     bizType, status: 'PROCESSING'|'SUCCESS'|'FAILED' }
    * @returns {Promise<{total:number,page:number,pageSize:number,list:Array}>}
    */
   list: (params = {}) => {

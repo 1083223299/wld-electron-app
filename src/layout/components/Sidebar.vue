@@ -292,7 +292,7 @@ watch(
 }
 
 .brand-text {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.02em;
   color: #8f5eff;

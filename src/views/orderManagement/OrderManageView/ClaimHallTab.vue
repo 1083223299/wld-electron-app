@@ -5,7 +5,8 @@ import SearchComponent from '../../../components/SearchComponent/index.vue';
 import AppModal from '../../../components/AppModal.vue';
 import { useToast } from '../../../composables/useToast';
 import { useListMemory } from '../../../composables/useListMemory';
-import { orderApi, TYPE_OPTIONS, statusText, channelText } from '../../../api/modules/order';
+import { orderApi, TYPE_OPTIONS, statusText } from '../../../api/modules/order';
+import { channelNameMap } from '../../../api/modules/channel';
 import { STATUS_CLASS } from './mockData';
 
 /**
@@ -42,6 +43,17 @@ const searchFields = [
   },
 ];
 
+/* 渠道编码 → 名称映射（后端契约：接口只回 channelCode，渠道列显示名称用 GET /api/admin/channels 映射，
+ * 不使用写死的 DOUYIN / XHS / PRIVATE） */
+const channelNames = ref({}); // { code: name }
+
+/** 渠道编码 → 渠道名称；未匹配到时原样显示编码 */
+function channelDisplay(code) {
+  if (!code) return '—';
+  const key = String(code).trim();
+  return channelNames.value[key] || key;
+}
+
 /** 后端字段 → 页面展示字段 */
 function mapRow(item = {}) {
   const tags = [];
@@ -50,7 +62,7 @@ function mapRow(item = {}) {
   return {
     id: item.id,
     orderNo: item.orderNo || '',
-    channel: channelText(item.channelCode),
+    channel: channelDisplay(item.channelCode),
     channelCode: item.channelCode,
     thirdOrderNo: item.thirdOrderNo || '',
     amount: Number(item.amount) || 0,
@@ -117,17 +129,21 @@ function handleReset() {
   rememberFilter(filter, true);
 }
 
-onMounted(fetchHall);
+onMounted(async () => {
+  try {
+    channelNames.value = await channelNameMap(); // 渠道映射就绪后再拉列表
+  } catch {
+    channelNames.value = {};
+  }
+  fetchHall();
+});
 
 const columns = [
   { key: 'orderNo', title: '本平台订单号' },
-  { key: 'channel', title: '渠道' },
   { key: 'thirdOrderNo', title: '第三方订单号' },
   { key: 'amount', title: '订单金额（元）' },
   { key: 'product', title: '购买项目' },
-  { key: 'playerCount', title: '名额数' },
   { key: 'status', title: '订单状态' },
-  { key: 'tags', title: '订单标签' },
   { key: 'createTime', title: '创建时间' },
   { key: 'op', title: '操作' },
 ];
@@ -221,27 +237,10 @@ function tagClass(tag) {
 
       <template #cell-amount="{ row }">{{ Number(row.amount).toFixed(2) }}</template>
 
-      <template #cell-playerCount="{ row }">
-        {{ row.playerCount != null ? `${row.takenCount ?? 0}/${row.playerCount}` : '—' }}
-      </template>
-
-      <template #cell-channel="{ row }">
-        <span class="channel-tag">{{ (row.channel || '抖').slice(0, 1) }}</span>
-      </template>
-
       <template #cell-status="{ row }">
-        <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ row.status }}</span>
-      </template>
-
-      <template #cell-tags="{ row }">
         <div class="status-wrap">
-          <span
-            v-for="tag in row.tags"
-            :key="tag"
-            class="order-tag"
-            :class="`tag-${tagClass(tag)}`"
-          >{{ tag }}</span>
-          <span v-if="!row.tags?.length" class="muted-text">—</span>
+          <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ row.status }}</span>
+          <span v-for="tag in row.tags" :key="tag" class="order-tag" :class="`tag-${tagClass(tag)}`">{{ tag }}</span>
         </div>
       </template>
 
@@ -294,18 +293,22 @@ function tagClass(tag) {
 
 .status-badge {
   display: inline-block;
-  padding: 4px 10px;
-  border-radius: 999px;
+  padding: 3px 10px;
+  border-radius: 7px;
   font-size: 12px;
-  font-weight: 600;
-  line-height: 1.4;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: #fff;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
-.status-success { color: #0f9f6e; background: rgba(15, 159, 110, 0.08); }
-.status-warning { color: #b45309; background: rgba(180, 83, 9, 0.08); }
-.status-info { color: #1d4ed8; background: rgba(29, 78, 216, 0.08); }
-.status-danger { color: #d92d20; background: rgba(217, 45, 32, 0.08); }
-.status-muted { color: #475467; background: rgba(71, 84, 103, 0.08); }
+.status-success { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 2px 10px rgba(16, 185, 129, 0.35); }
+.status-warning { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 2px 10px rgba(245, 158, 11, 0.35); }
+.status-info { background: linear-gradient(135deg, #3b82f6, #2563eb); box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35); }
+.status-danger { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35); }
+.status-muted { background: linear-gradient(135deg, #6b7280, #4b5563); box-shadow: 0 2px 8px rgba(107, 114, 128, 0.25); }
 
 .order-tag {
   display: inline-block;

@@ -138,7 +138,7 @@ function pageChange(p) {
 // ============ 全部游戏（供编辑弹窗搜索联想；规格带 id，保存映射需 specId） ============
 const allGames = ref([]); // [{ id, name, specs: [{ id, name }] }]
 async function loadAllGames() {
-  const games = (await gameApi.list()) || [];
+  const games = (await gameApi.listAll()) || [];
   allGames.value = await Promise.all(
     (games || []).map(async (g) => {
       let specs = [];
@@ -309,15 +309,12 @@ watch(currentGameId, () => {
       <div class="sku-title-row">
         <button class="back-link" @click="goBack">&lt; 返回</button>
         <h2 class="sku-title">sku映射</h2>
-        <span v-if="activeShop && activeShop.shop" class="shop-badge">
-          当前店铺：{{ activeShop.shop }}
-        </span>
         <span v-if="currentGameName" class="sku-subtitle">当前游戏：{{ currentGameName }}</span>
       </div>
     </div>
 
-    <!-- 店铺切换 tabs（按钮展示 shopName） -->
-    <!-- <div class="shop-tabs">
+    <!-- 店铺切换 tabs（原型：渠道下方有店铺，当前仅一个，后续多店铺） -->
+    <div class="shop-tabs">
       <button
         v-for="s in shops"
         :key="s.shopId || s.shop"
@@ -328,7 +325,7 @@ watch(currentGameId, () => {
       >
         {{ s.shop }}
       </button>
-    </div> -->
+    </div>
 
     <!-- 筛选 -->
     <div class="list-page__search">
@@ -379,7 +376,7 @@ watch(currentGameId, () => {
           <textarea
             v-model="addForm.productIds"
             rows="4"
-            placeholder="多个商品ID用英文逗号,隔开"
+            placeholder="多个商品ID用英文分号;隔开"
           ></textarea>
         </div>
       </div>
@@ -503,20 +500,6 @@ watch(currentGameId, () => {
 .sku-subtitle {
   font-size: 12px;
   color: #8a93a6;
-}
-
-/* 顶部当前店铺徽标 */
-.shop-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--primary);
-  background: var(--primary-soft, rgba(139, 92, 246, 0.1));
-  border: 1px solid var(--primary-border, rgba(139, 92, 246, 0.25));
 }
 
 .shop-tabs {

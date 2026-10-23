@@ -2,7 +2,8 @@
 import { onMounted, ref } from 'vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useListMemory } from '../../../composables/useListMemory';
-import { orderApi, channelText } from '../../../api/modules/order';
+import { orderApi } from '../../../api/modules/order';
+import { channelNameMap } from '../../../api/modules/channel';
 
 /**
  * 催单列表（接口联调）：GET /api/admin/orders/urge-hall
@@ -15,12 +16,23 @@ const { page, pageSize, onPageSizeChange, onPageChange } = useListMemory();
 const rows = ref([]);
 const total = ref(0);
 
+/* 渠道编码 → 名称映射（后端契约：接口只回 channelCode，渠道列显示名称用 GET /api/admin/channels 映射，
+ * 不使用写死的 DOUYIN / XHS / PRIVATE） */
+const channelNames = ref({}); // { code: name }
+
+/** 渠道编码 → 渠道名称；未匹配到时原样显示编码 */
+function channelDisplay(code) {
+  if (!code) return '—';
+  const key = String(code).trim();
+  return channelNames.value[key] || key;
+}
+
 /** 后端字段 → 页面展示字段 */
 function mapRow(item = {}) {
   return {
     id: item.id,
     thirdOrderNo: item.thirdOrderNo || '',
-    channel: channelText(item.channelCode),
+    channel: channelDisplay(item.channelCode),
     channelCode: item.channelCode,
     amount: Number(item.amount) || 0,
     product: item.itemName || '',
@@ -40,10 +52,16 @@ async function fetchList() {
   }
 }
 
-onMounted(fetchList);
+onMounted(async () => {
+  try {
+    channelNames.value = await channelNameMap(); // 渠道映射就绪后再拉列表
+  } catch {
+    channelNames.value = {};
+  }
+  fetchList();
+});
 
 const columns = [
-  { key: 'channel', title: '渠道' },
   { key: 'thirdOrderNo', title: '第三方订单号' },
   { key: 'amount', title: '订单金额（元）' },
   { key: 'product', title: '购买项目' },
@@ -65,10 +83,6 @@ const columns = [
     >
       <template #toolbar>
         <h2 class="list-title">催单列表</h2>
-      </template>
-
-      <template #cell-channel="{ row }">
-        <span class="channel-tag">{{ (row.channel || '抖').slice(0, 1) }}</span>
       </template>
 
       <template #cell-amount="{ row }">{{ Number(row.amount).toFixed(2) }}</template>

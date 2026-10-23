@@ -247,6 +247,7 @@ export const STATUS_CLASS = {
 export const AUDIT_CLASS = {
   未提交: 'status-muted',
   待审核: 'status-warning',
+  审核通过: 'status-success',
   已驳回: 'status-danger',
   '-': 'status-muted',
 };

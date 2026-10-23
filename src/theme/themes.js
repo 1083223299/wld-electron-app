@@ -67,7 +67,7 @@ export const themes = [
       page: '#0b0d12',
       sidebar: '#12151d',
       card: '#151922',
-      primary: '#d4a440',
+      primary: '#151922',
       gradient: 'linear-gradient(135deg, #f0c453, #c9973a)',
     },
   },

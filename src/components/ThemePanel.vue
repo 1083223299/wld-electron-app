@@ -59,10 +59,7 @@ function onFollowSystem(val) {
     <transition name="theme-pop">
       <div v-if="open" class="theme-panel" role="dialog" aria-label="主题换肤">
         <div class="panel-head">
-          <div>
-            <div class="panel-title">主题换肤</div>
-            <div class="panel-sub">THEME CENTER · 一键切换全局视觉</div>
-          </div>
+          <div class="panel-title">主题换肤</div>
           <span class="panel-mode" :class="themeStore.isDark ? 'dark' : 'light'">
             {{ themeStore.isDark ? '暗色' : '亮色' }}
           </span>
@@ -70,43 +67,30 @@ function onFollowSystem(val) {
 
         <!-- 跟随系统：随系统明暗自动切换 -->
         <div class="system-toggle">
-          <span class="system-text">
-            <span class="system-title">跟随系统</span>
-            <span class="system-sub">随系统明暗自动切换（暗色用「暗夜黑金」）</span>
-          </span>
+          <span class="system-title">跟随系统</span>
           <el-switch v-model="followSystem" size="small" @change="onFollowSystem" />
         </div>
 
-        <div class="theme-grid">
+        <!-- 色板选择 -->
+        <div class="swatch-row">
           <button
             v-for="t in themes"
             :key="t.id"
-            class="theme-card"
+            class="swatch"
             :class="{ active: t.id === themeStore.name }"
             type="button"
+            :title="t.name"
             @click="pick(t.id)"
           >
-            <span class="preview" :style="{ background: t.preview.page }">
-              <span class="pv-sidebar" :style="{ background: t.preview.sidebar }">
-                <span class="pv-logo" :style="{ background: t.preview.primary }"></span>
-              </span>
-              <span class="pv-main">
-                <span class="pv-bar" :style="{ background: t.preview.card }"></span>
-                <span class="pv-body">
-                  <span class="pv-btn" :style="{ background: t.preview.gradient }"></span>
-                </span>
-              </span>
-              <span v-if="t.id === themeStore.name" class="pv-check">✓</span>
+            <span class="swatch-dot" :style="{ background: t.preview.primary }">
+              <span v-if="t.id === themeStore.name" class="swatch-check">✓</span>
             </span>
-            <span class="theme-meta">
-              <span class="theme-name">{{ t.name }}</span>
-              <span class="theme-sub">{{ t.subtitle }}</span>
-            </span>
+            <!-- <span class="swatch-name">{{ t.name }}</span> -->
           </button>
         </div>
 
         <div class="panel-foot">
-          <span class="foot-tip">✦ 选择后即时生效，自动记忆</span>
+          <span class="foot-tip">选择后即时生效，自动记忆</span>
         </div>
       </div>
     </transition>
@@ -180,7 +164,7 @@ function onFollowSystem(val) {
 
 .panel-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
 }
 .panel-title {
@@ -188,12 +172,6 @@ function onFollowSystem(val) {
   font-weight: 700;
   color: var(--text-main);
   letter-spacing: 0.02em;
-}
-.panel-sub {
-  margin-top: 3px;
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  color: var(--text-faint);
 }
 .panel-mode {
   font-size: 11px;
@@ -222,118 +200,77 @@ function onFollowSystem(val) {
   border-radius: 12px;
   background: var(--bg-elevated);
 }
-.system-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
 .system-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-main);
 }
-.system-sub {
-  margin-top: 2px;
-  font-size: 10.5px;
-  color: var(--text-faint);
-}
 
-/* ---- 主题卡片 ---- */
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
-  margin-top: 14px;
+/* ---- 色板选择 ---- */
+.swatch-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 16px;
 }
-.theme-card {
-  padding: 5px 5px 7px;
-  border: 1px solid var(--border-soft);
-  border-radius: 13px;
+.swatch {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: none;
   background: transparent;
   cursor: pointer;
-  text-align: center;
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  border-radius: 10px;
+  transition: background 0.15s ease;
 }
-.theme-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--primary-border-strong);
-  box-shadow: 0 8px 16px var(--primary-glow);
-}
-.theme-card.active {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary), 0 8px 18px var(--primary-glow);
+.swatch:hover {
+  background: var(--primary-soft);
 }
 
-.preview {
+.swatch-dot {
   position: relative;
-  display: flex;
-  height: 62px;
-  border-radius: 9px;
-  overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-.pv-sidebar {
-  width: 32%;
-  display: flex;
-  justify-content: center;
-  padding-top: 8px;
-}
-.pv-logo {
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-}
-.pv-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 6px;
-  gap: 4px;
-}
-.pv-bar {
-  height: 7px;
-  border-radius: 4px;
-  opacity: 0.95;
-}
-.pv-body {
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
-}
-.pv-btn {
-  width: 24px;
-  height: 9px;
-  border-radius: 5px;
-}
-.pv-check {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 15px;
-  height: 15px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: var(--primary);
-  color: var(--text-invert);
-  font-size: 9px;
-  line-height: 1;
+  border: 2px solid var(--border-soft);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.swatch:hover .swatch-dot {
+  border-color: var(--primary-border-strong);
+}
+.swatch.active .swatch-dot {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.swatch-check {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
-.theme-meta {
-  display: flex;
-  flex-direction: column;
-  margin-top: 6px;
-}
-.theme-name {
+.swatch-name {
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-main);
+  color: var(--text-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
-.theme-sub {
-  font-size: 9px;
-  color: var(--text-faint);
+.swatch.active .swatch-name {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 /* ---- 底部提示 ---- */

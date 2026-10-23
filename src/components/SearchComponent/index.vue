@@ -50,7 +50,12 @@ const gridStyle = computed(() => {
 
 const cloneFieldValue = (value) => {
   if (Array.isArray(value)) return [...value];
-  if (value !== null && typeof value === 'object') return JSON.parse(JSON.stringify(value));
+  if (value !== null && typeof value === 'object') {
+    // 关键修复：JSON.stringify 会丢弃 undefined 属性。Element Plus clearable 清除后值为 undefined，
+    // 若直接序列化会导致 values 缺失该字段，父组件 Object.assign(filter, values) 时无法覆盖旧筛选值，
+    // 造成"清除后点搜索，旧搜索值又恢复"。replacer 将 undefined 归一为空字符串保留字段。
+    return JSON.parse(JSON.stringify(value, (key, v) => (v === undefined ? '' : v)));
+  }
   return value;
 };
 

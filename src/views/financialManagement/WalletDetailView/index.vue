@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useListMemory } from '../../../composables/useListMemory';
@@ -7,7 +8,7 @@ import {
   financeApi,
   OWNER_TYPE_OPTIONS,
   BIZ_TYPE_OPTIONS,
-  bizTypeText,
+  resolveBizTypeLabel,
   ownerTypeText,
 } from '../../../api/modules/finance';
 
@@ -15,38 +16,59 @@ import {
  * 财务管理 > 收益明细（钱包明细）
  * 顶部双 Tab：收益(INCOME) / 押金(DEPOSIT)；搜索区 + 明细流水表格 + 分页
  * 数据源：GET /api/admin/finance/txns（服务端分页/筛选，详见 src/api/modules/finance.js）
+ * - 搜索区（按原型）：用户ID、用户名称、俱乐部ID、俱乐部名称、身份、收支类型、关联订单号、时间
+ * - 列表（按原型）：身份/账号ID/账号昵称/收支类型/订单金额(收支额带正负号)/关联订单号/时间
+ * - userId / clubName / orderNo 参数接口文档暂无，后端补齐后即生效（空值不传）
+ * - 关联订单号：原型为普通文本无跳转；当前按用户要求实现跳转——点击跳到订单管理-订单列表并带该订单号筛选定位
  */
+
+const router = useRouter();
+
+// 关联订单号点击：跳转订单管理-订单列表，预填本平台订单号筛选并查询定位
+function goOrder(orderNo) {
+  if (!orderNo) return;
+  router.push({ path: '/orders/manage', query: { tab: 'order', orderNo } });
+}
 
 // ===== Tab 切换（对应接口 walletType 参数） =====
 const activeTab = ref('income'); // income | deposit
 
-// ===== 筛选条件（与接口 Query 参数一一对应） =====
+// ===== 筛选条件（与接口 Query 参数一一对应；userId/clubName/orderNo 后端补齐后即生效，空值不传） =====
 const filter = reactive({
+  userId: '',    // 用户ID（原型筛选项，接口待后端补 Query）
   keyword: '',   // 匹配账号昵称或手机号
   clubId: '',    // 按俱乐部筛选
+  clubName: '',  // 俱乐部名称（原型筛选项，接口待后端补 Query）
   ownerType: '', // 身份 CLUB / PLAYER
   bizType: '',   // 收支类型（业务码）
+  orderNo: '',   // 关联订单号（原型筛选项，接口待后端补 Query）
   timeRange: [], // 时间范围 → from / to
 });
 
-// ===== 收支类型选项：预置 + 接口实际返回动态补充 =====
+// ===== 收支类型选项：预置 + 接口实际返回动态补充（文案统一走 resolveBizTypeLabel：接口 bizTypeLabel 优先，预置兜底） =====
+// 去重口径：按中文 label 去重（SYSTEM_DEDUCT / SETTLE_VOID 同为"支出-系统扣款"时下拉只保留首个），
+// 接口返回的新业务码 / 同码不同文案（如 BALANCE_OFFSET 金额为正时"收入-余额抵扣"）仍会动态并入
 const bizTypeOptions = ref([...BIZ_TYPE_OPTIONS]);
 function collectBizTypes(list) {
   if (!Array.isArray(list)) return;
-  const seen = new Set(bizTypeOptions.value.map((o) => o.value));
+  const seenLabels = new Set(bizTypeOptions.value.map((o) => o.label));
   const added = [];
   for (const item of list) {
-    if (!item || !item.bizType || seen.has(item.bizType)) continue;
-    seen.add(item.bizType);
-    added.push({ label: item.bizTypeLabel || bizTypeText(item.bizType), value: item.bizType });
+    if (!item || !item.bizType) continue;
+    const label = resolveBizTypeLabel(item);
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
+    added.push({ label, value: item.bizType });
   }
   if (added.length) bizTypeOptions.value = [...bizTypeOptions.value, ...added];
 }
 
-// 搜索字段（用户ID/俱乐部名称/关联订单号接口无对应 Query 参数，按接口能力收敛）
+// 搜索字段（顺序与原型「钱包明细」一致：用户ID/用户名称/俱乐部ID/俱乐部名称/身份/收支类型/关联订单号/时间）
 const searchFields = computed(() => [
+  { prop: 'userId', label: '用户ID', type: 'input', placeholder: '请输入用户ID' },
   { prop: 'keyword', label: '用户名称', type: 'input', placeholder: '账号昵称或手机号' },
   { prop: 'clubId', label: '俱乐部ID', type: 'input', placeholder: '请输入俱乐部ID' },
+  { prop: 'clubName', label: '俱乐部名称', type: 'input', placeholder: '请输入俱乐部名称' },
   {
     prop: 'ownerType', label: '身份', type: 'select', placeholder: '请选择身份',
     options: [{ label: '全部', value: '' }, ...OWNER_TYPE_OPTIONS],
@@ -55,6 +77,7 @@ const searchFields = computed(() => [
     prop: 'bizType', label: '收支类型', type: 'select', placeholder: '请选择收支类型',
     options: [{ label: '全部', value: '' }, ...bizTypeOptions.value],
   },
+  { prop: 'orderNo', label: '关联订单号', type: 'input', placeholder: '请输入关联订单号' },
   {
     prop: 'timeRange', label: '时间', type: 'daterange',
     startPlaceholder: '开始时间', endPlaceholder: '结束时间',
@@ -68,7 +91,7 @@ const searchFields = computed(() => [
 
 // ===== 分页与列表记忆 =====
 const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberFilter } = useListMemory({
-  filterKeys: ['keyword', 'clubId', 'ownerType', 'bizType', 'timeRange'],
+  filterKeys: ['userId', 'keyword', 'clubId', 'clubName', 'ownerType', 'bizType', 'orderNo', 'timeRange'],
 });
 restoreFilter(filter);
 
@@ -87,7 +110,7 @@ function mapRow(item = {}) {
     accountName: item.accountName || '—',
     ownerTypeText: ownerTypeText(item.ownerType),
     clubName: item.clubName || '—',
-    bizTypeLabel: item.bizTypeLabel || bizTypeText(item.bizType),
+    bizTypeLabel: resolveBizTypeLabel(item),
     amount: Number.isFinite(amount) ? amount : 0,
     orderAmount: Number.isFinite(orderAmount) ? orderAmount : null,
     orderNo: item.orderNo || '',
@@ -119,9 +142,12 @@ async function fetchList() {
       to: to || undefined,
       ownerType: filter.ownerType || undefined,
       walletType: activeTab.value === 'income' ? 'INCOME' : 'DEPOSIT',
+      userId: filter.userId || undefined,
       keyword: filter.keyword || undefined,
       clubId: filter.clubId || undefined,
+      clubName: filter.clubName || undefined,
       bizType: filter.bizType || undefined,
+      orderNo: filter.orderNo || undefined,
     });
     const list = (res && res.list) || [];
     rows.value = list.map(mapRow);
@@ -172,30 +198,21 @@ function pageSizeChange(size) {
   fetchList();
 }
 
-// ===== 表格列 =====
+// ===== 表格列（与原型「钱包明细」截图一致：身份/账号ID/账号昵称/收支类型/订单金额/关联订单号/时间；原型无备注、无俱乐部名称、无独立金额列） =====
 const columns = [
   { key: 'ownerTypeText', title: '身份' },
   { key: 'accountId', title: '账号ID' },
   { key: 'accountName', title: '账号昵称' },
-  { key: 'clubName', title: '俱乐部名称' },
   { key: 'bizTypeLabel', title: '收支类型' },
-  { key: 'amount', title: '金额' },
-  { key: 'orderAmount', title: '订单金额' },
+  { key: 'amount', title: '订单金额' },
   { key: 'orderNo', title: '关联订单号' },
   { key: 'createdAt', title: '时间' },
-  { key: 'reason', title: '备注' },
 ];
 
-// 金额格式化：带正负号
+// 金额格式化：带正负号（收入 +，支出 -；原型「订单金额」列展示即收支金额）
 function formatAmount(val) {
   const num = Number(val) || 0;
   return `${num > 0 ? '+' : ''}${num.toFixed(2)}`;
-}
-
-// 订单金额：接口未返回时显示 —
-function formatOrderAmount(val) {
-  if (val === null || val === undefined || val === '') return '—';
-  return Number(val).toFixed(2);
 }
 </script>
 
@@ -247,19 +264,9 @@ function formatOrderAmount(val) {
           </span>
         </template>
 
-        <template #cell-orderAmount="{ row }">
-          <span :class="{ 'muted-text': row.orderAmount === null }">
-            {{ formatOrderAmount(row.orderAmount) }}
-          </span>
-        </template>
-
         <template #cell-orderNo="{ row }">
-          <a v-if="row.orderNo" class="relation-link">{{ row.orderNo }}</a>
+          <a v-if="row.orderNo" class="relation-link" href="javascript:;" @click="goOrder(row.orderNo)">{{ row.orderNo }}</a>
           <span v-else class="muted-text">—</span>
-        </template>
-
-        <template #cell-reason="{ row }">
-          <span :class="{ 'muted-text': !row.reason }">{{ row.reason || '—' }}</span>
         </template>
       </DataTable>
 

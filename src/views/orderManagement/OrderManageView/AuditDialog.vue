@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
-import { orderApi } from '../../../api/modules/order';
+import { orderApi, slotSourceText } from '../../../api/modules/order';
 
 /**
  * 订单审核弹窗内容（接口联调 + 原型 UI 恢复）
@@ -75,6 +75,24 @@ onMounted(loadProfit);
 /** 完成凭证：进行中/已完成/交易关闭 展示（coverUrl/endUrl/progressUrls，接口已返回） */
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
 
+/* 打手信息（slots：playerName/clubName/takenAt/transferredAt 后端已补齐；
+   展示规则：transferredAt 空 → 接单时间，有值 → 转单时间，转出的排后面） */
+const players = computed(() => {
+  const list = (props.row.slots || []).map((s) => ({
+    slotNo: s.slotNo,
+    playerId: s.playerId,
+    playerName: s.playerName || '',
+    clubName: s.clubName || '',
+    clubId: s.clubId,
+    source: slotSourceText(s.source),
+    takenAt: s.takenAt || '',
+    transferredAt: s.transferredAt || '',
+  }));
+  return list
+    .slice()
+    .sort((a, b) => (a.transferredAt ? 1 : 0) - (b.transferredAt ? 1 : 0) || a.slotNo - b.slotNo);
+});
+
 function submit() {
   if (form.result === '驳回' && !form.reason.trim()) {
     return show('请填写驳回原因', 'warning');
@@ -87,6 +105,20 @@ defineExpose({ submit });
 
 <template>
   <div class="audit-dialog">
+    <!-- 打手信息（slots：playerName/clubName/takenAt/transferredAt，后端已补齐） -->
+    <section v-if="players.length" class="au-section">
+      <h4>打手信息</h4>
+      <div class="player-grid">
+        <div v-for="p in players" :key="`${p.slotNo}-${p.playerId}`" class="player-card">
+          <div class="player-line">
+            <strong>{{ p.playerName || '未命名打手' }}（{{ p.playerId }}）</strong>
+            <span>{{ p.clubName || '—' }}{{ p.clubId ? `（${p.clubId}）` : '' }}</span>
+            <span class="player-time">{{ p.transferredAt ? `转单时间：${p.transferredAt}` : `接单时间：${p.takenAt || '—'}` }}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 分润信息（POST /api/admin/orders/{id}/profit-details，未锁定分润时 available=false） -->
     <section class="au-section">
       <h4>分润信息</h4>
@@ -128,20 +160,43 @@ defineExpose({ submit });
       <div v-if="hasProof" class="proof-grid">
         <div class="proof-box">
           <span>首图</span>
-          <img v-if="row.proofFirst" :src="row.proofFirst" alt="首图" />
+          <el-image
+            v-if="row.proofFirst"
+            :src="row.proofFirst"
+            alt="首图"
+            fit="contain"
+            :preview-src-list="[row.proofFirst]"
+            preview-teleported
+          />
           <em v-else>未上传</em>
           <em v-if="row.proofFirst">{{ row.proofUploadTime }} 上传</em>
         </div>
         <div class="proof-box">
           <span>尾图</span>
-          <img v-if="row.proofLast" :src="row.proofLast" alt="尾图" />
+          <el-image
+            v-if="row.proofLast"
+            :src="row.proofLast"
+            alt="尾图"
+            fit="contain"
+            :preview-src-list="[row.proofLast]"
+            preview-teleported
+          />
           <em v-else>未上传</em>
           <em v-if="row.proofLast">{{ row.proofUploadTime }} 上传</em>
         </div>
         <div class="proof-box">
           <span>进程图</span>
           <div v-if="row.proofProcess && row.proofProcess.length" class="proof-imgs">
-            <img v-for="(img, i) in row.proofProcess" :key="i" :src="img" alt="进程图" />
+            <el-image
+              v-for="(img, i) in row.proofProcess"
+              :key="i"
+              :src="img"
+              alt="进程图"
+              fit="cover"
+              :preview-src-list="row.proofProcess"
+              :initial-index="i"
+              preview-teleported
+            />
           </div>
           <em v-else>未上传</em>
           <em v-if="row.proofProcess && row.proofProcess.length">{{ row.proofUploadTime }} 上传</em>
@@ -180,7 +235,6 @@ defineExpose({ submit });
         ></textarea>
         <div class="char-count">{{ form.reason.length }}/50</div>
       </div>
-      <p class="perm-tip">审核员和管理员有此按钮；审核通过后订单进入已完成。</p>
     </section>
 
     <!-- 订单备注 -->
@@ -253,15 +307,46 @@ defineExpose({ submit });
   color: #d92d20 !important;
 }
 
-.perm-tip {
-  margin: 0;
-  padding: 9px 12px;
+/* 打手信息卡片 */
+.player-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.player-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
   border-radius: 10px;
-  background: var(--primary-soft);
-  border: 1px solid var(--primary-glow);
-  color: var(--primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   font-size: 12px;
-  line-height: 1.6;
+  color: var(--text-sub);
+}
+
+.player-card strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+/* 打手卡片一行三段：姓名（ID）｜俱乐部（ID）｜接单/转单时间 */
+.player-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.player-line strong::after {
+  content: '｜';
+  margin-left: 8px;
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.player-time {
+  color: var(--text-faint);
 }
 
 .form-row {
@@ -387,10 +472,9 @@ defineExpose({ submit });
   color: var(--text-main);
 }
 
-.proof-box img {
+.proof-box .el-image {
   max-width: 100%;
   max-height: 90px;
-  object-fit: contain;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -408,9 +492,8 @@ defineExpose({ submit });
   justify-content: center;
 }
 
-.proof-imgs img {
+.proof-imgs .el-image {
   width: 64px;
   height: 48px;
-  object-fit: cover;
 }
 </style>

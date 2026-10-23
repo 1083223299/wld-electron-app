@@ -81,7 +81,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-frame">
-    <AppTopbar />
+    <AppTopbar v-if="isLoginPage" />
 
     <div class="app-root">
       <router-view />
