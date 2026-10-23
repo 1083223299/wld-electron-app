@@ -29,9 +29,14 @@ const searchFields = [
   {
     prop: 'createTime',
     label: '创建时间',
-    type: 'daterange-no-time',
+    type: 'daterange',
     startPlaceholder: '开始时间',
     endPlaceholder: '结束时间',
+    shortcuts: [
+      { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+      { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+      { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+    ],
     span: 6,
   },
 ];
@@ -53,27 +58,27 @@ const columns = [
   { key: 'op', title: '操作' },
 ];
 
-/** 日期（Date 或字符串）→ 'yyyy-MM-dd'，供 createdFrom/createdTo 使用 */
-function toDateStr(value) {
+/** 日期（Date 或字符串）→ 'yyyy-MM-ddTHH:mm:ss'，供 createdFrom/createdTo 使用（后端只接受 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss） */
+function toDateTimeStr(value) {
   if (!value) return '';
   const d = value instanceof Date ? value : new Date(String(value).replace(/-/g, '/'));
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 async function fetchList() {
   loading.value = true;
   try {
-    // 服务端分页/筛选：id 完全匹配、name 模糊、createdFrom/createdTo 区间
+    // 服务端分页/筛选：id 完全匹配、name 模糊、createdFrom/createdTo 区间（yyyy-MM-dd HH:mm:ss）
     const range = Array.isArray(filter.createTime) && filter.createTime.length === 2 ? filter.createTime : [];
     const res = await gameApi.list({
       page: page.value,
       pageSize: pageSize.value,
       id: filter.gameId,
       name: filter.gameName,
-      createdFrom: toDateStr(range[0]),
-      createdTo: toDateStr(range[1]),
+      createdFrom: toDateTimeStr(range[0]),
+      createdTo: toDateTimeStr(range[1]),
     });
     rows.value = (res && res.list) || [];
     total.value = (res && res.total) || 0;

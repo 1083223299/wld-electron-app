@@ -31,9 +31,14 @@ const searchFields = [
   {
     prop: 'dateRange',
     label: '日期',
-    type: 'daterange-no-time',
-    startPlaceholder: '开始日期',
-    endPlaceholder: '结束日期',
+    type: 'daterange',
+    startPlaceholder: '开始时间',
+    endPlaceholder: '结束时间',
+    shortcuts: [
+      { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+      { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+      { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+    ],
   },
   {
     prop: 'status',
@@ -80,11 +85,19 @@ async function loadList() {
   loading.value = true;
   try {
     const [startDate, endDate] = filter.dateRange || [];
+    // 时间筛选传参：yyyy-MM-ddTHH:mm:ss（后端只接受 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss，空格分隔会报 400；Date 对象直传会被序列化为英文格式，后端无法解析）
+    const fmtDT = (d) => {
+      if (!d) return '';
+      const date = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(date.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    };
     const res = await handoverApi.list({
       page: page.value,
       pageSize: pageSize.value,
-      from: startDate || '',
-      to: endDate || '',
+      from: fmtDT(startDate),
+      to: fmtDT(endDate),
       status: filter.status,
       mine: relatedToMe.value ? 1 : '', // 传 1 仅看与我相关；空值自动剔除
     });

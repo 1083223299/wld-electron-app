@@ -245,6 +245,17 @@ function formatDay(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** 时间筛选传参：yyyy-MM-ddTHH:mm:ss（后端只接受 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss，空格分隔会报 400 PARAM_ERROR）
+ * 注意：SearchComponent 的 daterange 配置 value-format 为字符串（"YYYY-MM-DD HH:mm:ss"），
+ * 需兼容字符串与 Date 两种输入，不能只判 Date 实例 */
+function formatDateTime(d) {
+  if (!d) return '';
+  const date = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 async function fetchList() {
   loading.value = true;
   try {
@@ -258,8 +269,8 @@ async function fetchList() {
       clubId: filter.clubId,
       clubName: filter.clubName,
       accountStatus: filter.accountStatus,
-      createdFrom: formatDay(start),
-      createdTo: formatDay(end),
+      createdFrom: formatDateTime(start),
+      createdTo: formatDateTime(end),
     });
     rows.value = ((res && res.list) || []).map(mapPlayerRow);
     total.value = (res && res.total) || 0;
@@ -546,6 +557,28 @@ const getFileMeta = (file) => {
   if (ext === 'txt') return { icon: '📄', color: '#64748b' };
   return { icon: '📎', color: '#64748b' };
 };
+
+/* ===== 文件展示交互（视频/音频弹窗预览无下载；其他文件点击直接下载） ===== */
+const isVideoFile = (item) => VIDEO_EXTS.includes(getFileExt(item?.name || ''));
+const isAudioFile = (item) => AUDIO_EXTS.includes(getFileExt(item?.name || ''));
+
+const mediaPreview = ref({ visible: false, url: '', name: '', kind: '' }); // kind: video | audio
+function openMediaPreview(item) {
+  if (!item || !item.url) return;
+  mediaPreview.value = { visible: true, url: item.url, name: item.name || '预览', kind: isVideoFile(item) ? 'video' : 'audio' };
+}
+
+/** 触发下载：创建临时 a 标签模拟点击（跨域资源时以服务器响应头为准，属前端唯一可行方式） */
+function triggerDownload(item) {
+  if (!item || !item.url) return;
+  const a = document.createElement('a');
+  a.href = item.url;
+  a.download = item.name || '';
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 
 const previewUrls = new WeakMap();
 const getImagePreview = (file) => {
@@ -889,11 +922,20 @@ function pageSizeChange(size) {
                   />
                   <span v-show="item.imgError" class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
                 </template>
-                <span v-else class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
-                <div class="file-info">
-                  <a v-if="item.showName" class="file-name" :href="item.url" target="_blank" :title="item.name">{{ item.name }}</a>
-                </div>
-                <a v-if="!item.isImage && !item.unknown" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                <template v-else-if="isVideoFile(item) || isAudioFile(item)">
+                  <span class="file-icon clickable" :style="{ background: item.bg }" @click="openMediaPreview(item)">{{ item.icon }}</span>
+                  <div class="file-info">
+                    <a v-if="item.showName" class="file-name clickable" :title="item.name" @click.prevent="openMediaPreview(item)">{{ item.name }}</a>
+                  </div>
+                  <!-- 视频/音频：点击弹窗预览，不提供下载按钮 -->
+                </template>
+                <template v-else>
+                  <span class="file-icon clickable" :style="{ background: item.bg }" @click="triggerDownload(item)">{{ item.icon }}</span>
+                  <div class="file-info">
+                    <a v-if="item.showName" class="file-name clickable" :title="item.name" @click.prevent="triggerDownload(item)">{{ item.name }}</a>
+                  </div>
+                  <a class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                </template>
                 <button type="button" class="file-remove" @click="removeEditFile(item.index)">×</button>
               </div>
             </div>
@@ -978,11 +1020,20 @@ function pageSizeChange(size) {
                   />
                   <span v-show="item.imgError" class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
                 </template>
-                <span v-else class="file-icon" :style="{ background: item.bg }">{{ item.icon }}</span>
-                <div class="file-info">
-                  <a v-if="item.showName" class="file-name" :href="item.url" target="_blank" :title="item.name">{{ item.name }}</a>
-                </div>
-                <a v-if="!item.isImage && !item.unknown" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                <template v-else-if="isVideoFile(item) || isAudioFile(item)">
+                  <span class="file-icon clickable" :style="{ background: item.bg }" @click="openMediaPreview(item)">{{ item.icon }}</span>
+                  <div class="file-info">
+                    <a v-if="item.showName" class="file-name clickable" :title="item.name" @click.prevent="openMediaPreview(item)">{{ item.name }}</a>
+                  </div>
+                  <!-- 视频/音频：点击弹窗预览，不提供下载按钮 -->
+                </template>
+                <template v-else>
+                  <span class="file-icon clickable" :style="{ background: item.bg }" @click="triggerDownload(item)">{{ item.icon }}</span>
+                  <div class="file-info">
+                    <a v-if="item.showName" class="file-name clickable" :title="item.name" @click.prevent="triggerDownload(item)">{{ item.name }}</a>
+                  </div>
+                  <a class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                </template>
                 <button type="button" class="file-remove" @click="removeAssetFile(item.index)">×</button>
               </div>
             </div>
@@ -1004,6 +1055,15 @@ function pageSizeChange(size) {
         <button class="btn btn-plain" @click="assetDialogVisible = false">取消</button>
         <button class="btn btn-primary" @click="submitAsset">确定</button>
       </template>
+    </AppModal>
+
+    <!-- 视频/音频预览弹窗（仅预览，不提供下载） -->
+    <AppModal v-model="mediaPreview.visible" :title="mediaPreview.name" width="640px">
+      <div class="media-preview-body">
+        <video v-if="mediaPreview.kind === 'video'" :src="mediaPreview.url" controls autoplay class="media-player"></video>
+        <audio v-else :src="mediaPreview.url" controls autoplay class="media-player-audio"></audio>
+        <!-- <p class="media-preview-tip">仅预览，不提供下载</p> -->
+      </div>
     </AppModal>
 
     <AppModal v-model="specDialogVisible" :title="specDialogTitle" width="640px">
@@ -1510,6 +1570,15 @@ function pageSizeChange(size) {
   line-height: 1;
 }
 
+.file-icon.clickable,
+.file-name.clickable {
+  cursor: pointer;
+}
+.file-icon.clickable:hover,
+.file-name.clickable:hover {
+  color: #3563e9;
+}
+
 .file-thumb {
   flex: 0 0 auto;
   width: 34px;
@@ -1553,6 +1622,29 @@ function pageSizeChange(size) {
 }
 .chip-download:hover {
   color: #3563e9;
+}
+
+/* 视频/音频预览弹窗 */
+.media-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+.media-player {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: 10px;
+  background: #0f172a;
+}
+.media-player-audio {
+  width: 100%;
+}
+.media-preview-tip {
+  margin: 0;
+  font-size: 12px;
+  color: #98a2b3;
+  text-align: center;
 }
 
 .file-remove {

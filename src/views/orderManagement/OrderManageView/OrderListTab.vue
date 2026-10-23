@@ -137,6 +137,11 @@ const searchFields = computed(() => [
     startPlaceholder: '开始时间',
     endPlaceholder: '结束时间',
     span: 4,
+    shortcuts: [
+      { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+      { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+      { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+    ],
   },
 ]);
 
@@ -312,6 +317,15 @@ const fmtDay = (d) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
 
+/** 时间筛选传参：yyyy-MM-ddTHH:mm:ss（后端只接受 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss，空格分隔会报 400） */
+const fmtDateTime = (d) => {
+  if (!d) return '';
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+};
+
 function buildParams() {
   const [fromDay, toDay] = Array.isArray(filter.createTime) ? filter.createTime : [];
   const params = {
@@ -323,8 +337,8 @@ function buildParams() {
     status: filter.status,
     auditStatus: filter.auditStatus,
     orderType: filter.orderType,
-    from: fmtDay(fromDay),
-    to: fmtDay(toDay),
+    from: fmtDateTime(fromDay),
+    to: fmtDateTime(toDay),
   };
   // ownerId/ownerName 仅 scope=ALL 时有效（新 OpenAPI）
   if (scope.value === 'all' && filter.ownerId !== '' && filter.ownerId !== null && filter.ownerId !== undefined) {

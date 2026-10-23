@@ -94,11 +94,19 @@ async function fetchList() {
   loading.value = true;
   try {
     const range = Array.isArray(filter.timeRange) && filter.timeRange.length === 2 ? filter.timeRange : [];
+    // 时间筛选传参：yyyy-MM-ddTHH:mm:ss（后端只接受 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss，空格分隔会报 400 PARAM_ERROR；Date 对象直传会被序列化为英文格式，后端无法解析）
+    const fmtDT = (d) => {
+      if (!d) return '';
+      const date = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(date.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    };
     const res = await withdrawalApi.list({
       page: page.value,
       pageSize: pageSize.value,
-      from: range[0] || '',
-      to: range[1] || '',
+      from: fmtDT(range[0]),
+      to: fmtDT(range[1]),
       ownerType: filter.ownerType,
       walletType: filter.walletType || walletTypeByTab[activeTab.value],
       userId: filter.userId,

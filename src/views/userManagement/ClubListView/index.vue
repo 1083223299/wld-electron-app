@@ -100,6 +100,15 @@ function toDateStr(value) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** 时间筛选传参：yyyy-MM-ddTHH:mm:ss（后端只接受 yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss，空格分隔会报 400） */
+function toDateTimeStr(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function formatMoney(value) {
   if (value === undefined || value === null || value === '') return '0.00';
   const num = Number(value);
@@ -122,8 +131,8 @@ async function fetchList() {
       name: filter.clubName,
       phone: filter.phone,
       accountStatus: filter.accountStatus,
-      createdFrom: toDateStr(start),
-      createdTo: toDateStr(end),
+      createdFrom: toDateTimeStr(start),
+      createdTo: toDateTimeStr(end),
     });
     rows.value = res.list || [];
     total.value = res.total || 0;
@@ -306,6 +315,43 @@ function isImageFile(url = '') {
 function fileIsImage(item) {
   return isImageFile(item?.url) || isImageFile(item?.name);
 }
+
+/* ===== 文件展示交互（视频/音频弹窗预览无下载；其他文件点击直接下载） ===== */
+const AUDIO_EXTS = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'];
+const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv'];
+
+const getFileExt = (name = '') => {
+  const dot = (name || '').lastIndexOf('.');
+  return dot > -1 ? (name || '').slice(dot + 1).toLowerCase() : '';
+};
+const isVideoFile = (item) => VIDEO_EXTS.includes(getFileExt(item?.name || ''));
+const isAudioFile = (item) => AUDIO_EXTS.includes(getFileExt(item?.name || ''));
+
+const mediaPreview = ref({ visible: false, url: '', name: '', kind: '' }); // kind: video | audio
+function openMediaPreview(item) {
+  if (!item || !item.url) return;
+  mediaPreview.value = {
+    visible: true,
+    url: item.url,
+    name: item.name || '预览',
+    kind: isVideoFile(item) ? 'video' : 'audio',
+  };
+}
+
+/** 触发下载：创建临时 a 标签模拟点击（跨域资源时以服务器响应头为准，属前端唯一可行方式） */
+function triggerDownload(item) {
+  if (!item || !item.url) return;
+  const a = document.createElement('a');
+  a.href = item.url;
+  a.download = item.name || '';
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** 视频/音频文件卡片图标文案 */
+const mediaIcon = (item) => (isVideoFile(item) ? '🎬' : '🎵');
 
 function licenseImages(row) {
   const raw = row.licenseUrl || row.licenses;
@@ -1122,9 +1168,16 @@ onMounted(fetchList);
                   preview-teleported
                   title="点击放大"
                 />
-                <span v-else class="chip-file-icon">文件</span>
-                <span class="chip-name" :title="item.name">{{ item.name }}</span>
-                <a v-if="!fileIsImage(item)" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                <template v-else-if="isVideoFile(item) || isAudioFile(item)">
+                  <span class="chip-file-icon clickable" @click="openMediaPreview(item)">{{ mediaIcon(item) }}</span>
+                  <span class="chip-name clickable" :title="item.name" @click="openMediaPreview(item)">{{ item.name }}</span>
+                  <!-- 视频/音频：点击弹窗预览，不提供下载按钮 -->
+                </template>
+                <template v-else>
+                  <span class="chip-file-icon clickable" @click="triggerDownload(item)">文件</span>
+                  <span class="chip-name clickable" :title="item.name" @click="triggerDownload(item)">{{ item.name }}</span>
+                  <a class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                </template>
                 <button type="button" class="chip-remove" @click="removeEditFile(index)">×</button>
               </div>
             </div>
@@ -1212,9 +1265,16 @@ onMounted(fetchList);
                   preview-teleported
                   title="点击放大"
                 />
-                <span v-else class="chip-file-icon">文件</span>
-                <span class="chip-name" :title="item.name">{{ item.name }}</span>
-                <a v-if="!fileIsImage(item)" class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                <template v-else-if="isVideoFile(item) || isAudioFile(item)">
+                  <span class="chip-file-icon clickable" @click="openMediaPreview(item)">{{ mediaIcon(item) }}</span>
+                  <span class="chip-name clickable" :title="item.name" @click="openMediaPreview(item)">{{ item.name }}</span>
+                  <!-- 视频/音频：点击弹窗预览，不提供下载按钮 -->
+                </template>
+                <template v-else>
+                  <span class="chip-file-icon clickable" @click="triggerDownload(item)">文件</span>
+                  <span class="chip-name clickable" :title="item.name" @click="triggerDownload(item)">{{ item.name }}</span>
+                  <a class="chip-download" :href="item.url" :download="item.name" title="下载">⬇</a>
+                </template>
                 <button type="button" class="chip-remove" @click="removeAssetFile(index)">×</button>
               </div>
             </div>
@@ -1236,6 +1296,15 @@ onMounted(fetchList);
         <button class="btn btn-plain" type="button" @click="assetModalVisible = false">取消</button>
         <button class="btn btn-primary" type="button" @click="submitAsset">确定</button>
       </template>
+    </AppModal>
+
+    <!-- 视频/音频预览弹窗（仅预览，不提供下载） -->
+    <AppModal v-model="mediaPreview.visible" :title="mediaPreview.name" width="640px">
+      <div class="media-preview-body">
+        <video v-if="mediaPreview.kind === 'video'" :src="mediaPreview.url" controls autoplay class="media-player"></video>
+        <audio v-else :src="mediaPreview.url" controls autoplay class="media-player-audio"></audio>
+        <!-- <p class="media-preview-tip">仅预览，不提供下载</p> -->
+      </div>
     </AppModal>
 
     <!-- 可接单规格 -->
@@ -1305,6 +1374,7 @@ onMounted(fetchList);
   border: 1px solid #edf0f5;
   border-radius: 12px;
   padding: 18px 18px 0;
+  margin-bottom: 20px;
 }
 
 .table-toolbar {
@@ -2308,6 +2378,38 @@ onMounted(fetchList);
 }
 .chip-download:hover {
   color: #3563e9;
+}
+
+.chip-file-icon.clickable,
+.chip-name.clickable {
+  cursor: pointer;
+}
+.chip-file-icon.clickable:hover,
+.chip-name.clickable:hover {
+  color: #3563e9;
+}
+
+/* 视频/音频预览弹窗 */
+.media-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+.media-player {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: 10px;
+  background: #0f172a;
+}
+.media-player-audio {
+  width: 100%;
+}
+.media-preview-tip {
+  margin: 0;
+  font-size: 12px;
+  color: #98a2b3;
+  text-align: center;
 }
 .chip-remove {
   border: none;

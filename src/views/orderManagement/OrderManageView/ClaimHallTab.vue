@@ -40,6 +40,11 @@ const searchFields = [
     startPlaceholder: '开始时间',
     endPlaceholder: '结束时间',
     span: 8,
+    shortcuts: [
+      { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+      { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+      { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+    ],
   },
 ];
 
