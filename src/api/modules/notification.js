@@ -6,8 +6,12 @@ import { NOTIFY_TYPE } from '../notifySocket';
  * 依据 Apifox「未来洞电竞后台 / 09-通知 / 系统通知」OpenAPI 规格：
  * - 全部接口鉴权：Header Authorization: Bearer {token}（后台 JWT，三端 JWT 互不通用），
  *   request.js 已自动附加当前登录 token，无需重复传参
- * - 列表项字段：id / scene / title / content / bizKey / readFlag(0 未读 1 已读) / createdAt
- * - 列表接口无 Query 参数；已读接口无 body
+ * - 列表：GET /api/admin/notifications（page/pageSize 分页），返回 { list, unread, badge }
+ *   列表项：id / scene / sceneLabel / title / content / bizKey / readFlag / createdAt /
+ *           orderId / jumpTarget(ORDER) / orderNo / timeText(相对时间)
+ * - 未读角标：GET /api/admin/notifications/unread → { unread, badge（>99 为 '99+'） }
+ * - 已读：POST /api/admin/notifications/{id}/read（无 body，返回 { ok }）；
+ *   已读后后端经 WebSocket 推 type=UNREAD（仅 unread/badge）
  */
 
 /* ================= 场景 → 通知类型（页面跳转/标签用） ================= */
@@ -35,15 +39,38 @@ export function normalizeNotification(raw = {}) {
     content: raw.content || '',
     bizKey: raw.bizKey || '',
     time: raw.createdAt || '',
+    timeText: raw.timeText || '',
+    sceneLabel: raw.sceneLabel || '',
+    orderId: raw.orderId || null,
+    orderNo: raw.orderNo || '',
+    jumpTarget: raw.jumpTarget || '',
+    mentions: Array.isArray(raw.mentions) ? raw.mentions : [],
     read: raw.readFlag === 1,
+  };
+}
+
+/** 列表分页结果 → { list, unread, badge }（兼容旧数组返回） */
+export function normalizeNotificationPage(data) {
+  if (Array.isArray(data)) return { list: data, unread: 0, badge: '' };
+  return {
+    list: Array.isArray(data && data.list) ? data.list : [],
+    unread: Number(data && data.unread) || 0,
+    badge: (data && data.badge) != null ? String(data.badge) : '',
   };
 }
 
 /* ================= 系统通知（管理端）接口 ================= */
 
 export const notifyApi = {
-  /** 我的通知（管理端）GET /api/admin/notifications（无 Query 参数，返回数组） */
-  list: () => request.get('/api/admin/notifications'),
+  /** 我的通知（管理端）GET /api/admin/notifications（分页；返回 { list, unread, badge }） */
+  list: (params = {}) => {
+    const page = Number(params.page) || 1;
+    const pageSize = Number(params.pageSize) || 20;
+    return request.get(`/api/admin/notifications?page=${page}&pageSize=${pageSize}`);
+  },
+
+  /** 未读角标（管理端）GET /api/admin/notifications/unread → { unread, badge } */
+  unread: () => request.get('/api/admin/notifications/unread'),
 
   /** 标记通知已读 POST /api/admin/notifications/{id}/read（无 body，返回 { ok }） */
   markRead: (id) => request.post(`/api/admin/notifications/${id}/read`),

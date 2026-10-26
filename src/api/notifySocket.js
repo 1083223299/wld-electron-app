@@ -1,5 +1,6 @@
 import { watch } from 'vue';
-import { config } from '../config/env';
+import { config, notifyConfig } from '../config/env';
+import { getToken } from '../utils/auth';
 import { orderStore } from '../views/orderManagement/OrderManageView/mockData';
 import { orderConfigApi } from './modules/orderConfig';
 
@@ -17,14 +18,33 @@ import { orderConfigApi } from './modules/orderConfig';
  *       · 每 60 秒轮询推送一条示例消息（卡单/交接/公告轮换）
  *     - 接入真实后端后删除本分支即可。
  *  2. 真实 WebSocket 模式（useMock = false，dev/test/staging/prod）
- *     - 连接 config.websocketURL 配置的地址
+ *     - 连接 config.websocketURL 配置的地址，自动附加
+ *       ?token={登录token URL 编码}&client=ADMIN（后端 /ws/notify 规范，client 必须与 token 同端）
+ *     - 未登录（token 为空）时不建立连接；登录成功后由 store 侧 watch token 触发重连
  *     - 自动断线重连（指数退避，最长 30s）
- *     - 服务端消息约定：
- *       普通消息：{ type: 'stuck'|'handover'|'system', title, content, orderNos, mentions, time }
- *       包装消息：{ type: 'notify', payload: { ...同上 } }
- *       或直接推数组 [ { ... }, ... ]
+ *     - 服务端消息约定（后端实时通知 JSON）：
+ *       新通知 { type:'NOTIFICATION', id, scene, sceneLabel, title, content,
+ *                orderId, jumpTarget, timeText, unread, badge }
+ *       标记已读后 { type:'UNREAD', unread, badge }（仅角标，不入列表）
+ *       badge 超过 99 为 '99+'
+ *     - 兼容旧约定兜底：{ type:'stuck'|'handover'|'system', ... } / { type:'notify', payload } / 数组
  * ---------------------------------------------------------------
  */
+
+/* ================= 推送消息类型（后端实时通知） ================= */
+export const WS_MSG_TYPE = {
+  NOTIFICATION: 'NOTIFICATION', // 新通知（含完整字段 + unread/badge）
+  UNREAD: 'UNREAD', // 已读角标刷新（仅 unread/badge）
+};
+
+/** 后端 /ws/notify 连接地址组装：base?token={urlencoded}&client=ADMIN（后台端） */
+export function buildWsUrl(base = '') {
+  if (!base) return '';
+  const token = getToken();
+  if (!token) return '';
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}token=${encodeURIComponent(token)}&client=ADMIN`;
+}
 
 /* ================= 通知类型 ================= */
 export const NOTIFY_TYPE = {
@@ -203,27 +223,54 @@ function startMockEngine(emit) {
 
 /* ================= 真实 WebSocket 客户端 ================= */
 
-/**
- * 启动真实 WS 通道（含断线自动重连）
- * @param {(msg: Object) => void} emit
- * @param {(status: 'connected'|'disconnected') => void} onStatus
- */
-function startRealSocket(emit, onStatus) {
-  const url = config.websocketURL;
+/** 创建一条 WS 连接的公共处理（重连退避 + 假死检测看门狗），解析逻辑由调用方传入 */
+function createWsConnection({ base, onMessage, onStatus }) {
+  const {
+    reconnectBaseMs = 3000,
+    reconnectMaxMs = 30000,
+    idleTimeoutMs = 45000,
+  } = notifyConfig;
   let ws = null;
   let closed = false;
   let retry = 0;
   let retryTimer = null;
+  let watchdogTimer = null;
+
+  const clearWatchdog = () => {
+    if (watchdogTimer) {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = null;
+    }
+  };
+
+  /** 假死检测：连接已打开时，超过 idleTimeoutMs 未收到任何服务端消息则主动断开，触发 onclose → 重连 */
+  const armWatchdog = () => {
+    clearWatchdog();
+    if (!(idleTimeoutMs > 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
+    watchdogTimer = setTimeout(() => {
+      try {
+        ws && ws.close();
+      } catch {
+        /* 忽略 */
+      }
+    }, idleTimeoutMs);
+  };
 
   const scheduleRetry = () => {
-    if (closed || !url) return;
-    const delay = Math.min(30000, 3000 * 2 ** retry);
+    if (closed || !base) return;
+    const delay = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** retry);
     retry += 1;
     retryTimer = setTimeout(connect, delay);
   };
 
   const connect = () => {
-    if (closed || !url) return;
+    if (closed || !base) return;
+    // 未登录（token 为空）不建连；由 store 侧 watch token 变化后调用 restart 重连
+    const url = buildWsUrl(base);
+    if (!url) {
+      onStatus('disconnected');
+      return;
+    }
     try {
       ws = new WebSocket(url);
     } catch (e) {
@@ -233,24 +280,15 @@ function startRealSocket(emit, onStatus) {
     ws.onopen = () => {
       retry = 0;
       onStatus('connected');
+      armWatchdog();
     };
     ws.onmessage = (ev) => {
-      let data = null;
-      try {
-        data = JSON.parse(ev.data);
-      } catch {
-        return;
-      }
-      const rawList = Array.isArray(data) ? data : [data];
-      rawList.forEach((raw) => {
-        if (!raw || typeof raw !== 'object') return;
-        // 包装格式 { type:'notify', payload } → 解包
-        const msg = raw.type === 'notify' && raw.payload ? raw.payload : raw;
-        if (!msg || typeof msg !== 'object') return;
-        emit(msg);
-      });
+      // 任何服务端消息都说明连接存活：重置假死检测
+      armWatchdog();
+      onMessage(ev);
     };
     ws.onclose = () => {
+      clearWatchdog();
       onStatus('disconnected');
       scheduleRetry();
     };
@@ -267,6 +305,7 @@ function startRealSocket(emit, onStatus) {
 
   return () => {
     closed = true;
+    clearWatchdog();
     if (retryTimer) clearTimeout(retryTimer);
     try {
       ws && ws.close();
@@ -274,6 +313,39 @@ function startRealSocket(emit, onStatus) {
       /* 忽略 */
     }
   };
+}
+
+/**
+ * 启动真实 WS 通道（含断线自动重连 + 假死检测）
+ * @param {(msg: Object) => void} emit
+ * @param {(status: 'connected'|'disconnected') => void} onStatus
+ */
+function startRealSocket(emit, onStatus) {
+  return createWsConnection({
+    base: config.websocketURL,
+    onMessage: (ev) => {
+      let data = null;
+      try {
+        data = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      const rawList = Array.isArray(data) ? data : [data];
+      rawList.forEach((raw) => {
+        if (!raw || typeof raw !== 'object') return;
+        // 后端实时通知：type=NOTIFICATION / UNREAD 原样交给 store 处理
+        if (raw.type === WS_MSG_TYPE.NOTIFICATION || raw.type === WS_MSG_TYPE.UNREAD) {
+          emit(raw);
+          return;
+        }
+        // 兼容旧约定兜底：包装格式 { type:'notify', payload } → 解包；否则原样
+        const msg = raw.type === 'notify' && raw.payload ? raw.payload : raw;
+        if (!msg || typeof msg !== 'object') return;
+        emit(msg);
+      });
+    },
+    onStatus,
+  });
 }
 
 /* ================= 对外入口 ================= */
@@ -304,4 +376,72 @@ export function createNotifySocket({ onMessage, onStatus }) {
   }
 
   return { mode: 'ws', close: startRealSocket(onMessage, onStatus) };
+}
+
+/* ================= 后台弹框通道（/ws/admin） ================= */
+
+/**
+ * 解析后台弹框通道消息：纯文本「标题:内容」（中间中文冒号）；兼容 JSON 兜底
+ * @param {string|Object} data
+ * @returns {{ type: string, title: string, content: string }|null}
+ */
+export function parseAdminAlert(data) {
+  // 兼容 JSON（后端误推 / 版本过渡期）
+  if (data && typeof data === 'object') {
+    const title = data.title || '';
+    const content = data.content || data.message || data.body || '';
+    if (title || content) {
+      return { type: 'admin-alert', title, content };
+    }
+    return null;
+  }
+  if (typeof data !== 'string') return null;
+  const text = data.trim();
+  if (!text) return null;
+  const idx = text.indexOf('：'); // 中文冒号
+  if (idx > 0 && idx < text.length - 1) {
+    return { type: 'admin-alert', title: text.slice(0, idx).trim(), content: text.slice(idx + 1).trim() };
+  }
+  return { type: 'admin-alert', title: '系统通知', content: text };
+}
+
+/**
+ * 启动后台弹框 WS 通道（/ws/admin，纯文本「标题:内容」）
+ * - 与 /ws/notify 同一套握手：?token={登录token URL编码}&client=ADMIN
+ * - 未配置地址（如 PROD 尚未有域名）时不连接；配置后自动启用
+ * - 未登录（token 为空）时不建连；由 store 侧 watch token 触发重连
+ * - 只有「需要弹框」的后台通知才会推送，平时无消息属正常
+ * - 复用公共连接管理：断线自动重连 + 假死检测看门狗
+ * @param {(msg: Object) => void} emit
+ * @param {(status: 'connected'|'disconnected') => void} onStatus
+ */
+function startAdminAlertSocket(emit, onStatus) {
+  return createWsConnection({
+    base: config.adminWSURL || '',
+    onMessage: (ev) => {
+      let data = null;
+      try {
+        data = JSON.parse(ev.data);
+      } catch {
+        data = ev.data;
+      }
+      const msg = parseAdminAlert(data);
+      if (msg) emit(msg);
+    },
+    onStatus,
+  });
+}
+
+/**
+ * 创建后台弹框通道
+ * @param {(msg: Object) => void} onMessage 收到「标题:内容」弹框消息回调
+ * @param {(status: 'connected'|'disconnected') => void} onStatus
+ * @returns {{ mode: 'ws'|'none', close: Function }}
+ */
+export function createAdminAlertSocket({ onMessage, onStatus }) {
+  const url = config.adminWSURL || '';
+  if (!url) {
+    return { mode: 'none', close: () => {} };
+  }
+  return { mode: 'ws', close: startAdminAlertSocket(onMessage, onStatus) };
 }

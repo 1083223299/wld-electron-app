@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useNotifyStore } from '../../../stores/notify';
 import { NOTIFY_TYPE } from '../../../api/notifySocket';
-import { notifyApi, normalizeNotification } from '../../../api/modules/notification';
+import { notifyApi, normalizeNotification, normalizeNotificationPage } from '../../../api/modules/notification';
 import { useToast } from '../../../composables/useToast';
 
 /**
@@ -27,17 +27,18 @@ const filtered = computed(() =>
 );
 const unreadCount = computed(() => items.value.filter((i) => !i.read).length);
 
-/* ================= 列表加载（管理端接口） ================= */
+/* ================= 列表加载（管理端接口，分页 + 后端未读角标） ================= */
 async function loadList() {
   loading.value = true;
   try {
-    const list = await notifyApi.list();
-    items.value = (Array.isArray(list) ? list : [])
+    const res = await notifyApi.list({ page: 1, pageSize: 50 });
+    const { list, unread, badge } = normalizeNotificationPage(res);
+    items.value = list
       .map(normalizeNotification)
       .sort((a, b) => String(b.time).localeCompare(String(a.time)));
-    // 同步到 store：铃铛角标 / 托盘未读列表与后端保持一致
+    // 同步到 store：铃铛角标 / 托盘未读列表与后端保持一致（后端 badge 权威）
     notify.items = items.value;
-    notify.syncTrayBadge();
+    notify.applyBadge(unread, badge);
   } catch {
     // 接口不可用（本地 mock 环境等）：回落到实时通道列表
     items.value = notify.items.slice();
@@ -46,8 +47,10 @@ async function loadList() {
   }
 }
 
-/* ================= 时间显示（相对时间，如“2分钟前”） ================= */
-function relativeTime(t) {
+/* ================= 时间显示（相对时间，后端 timeText 优先，如“2分钟前”） ================= */
+function relativeTime(item) {
+  if (item && item.timeText) return item.timeText;
+  const t = item ? item.time : '';
   if (!t) return '';
   const then = new Date(String(t).replace(/-/g, '/')).getTime();
   if (Number.isNaN(then)) return String(t);
@@ -62,13 +65,18 @@ function relativeTime(t) {
   return String(t).slice(0, 10);
 }
 
-/* ================= 跳转（按消息类型） ================= */
+/* ================= 跳转（后端 jumpTarget=ORDER 进订单，其余按消息类型） ================= */
 function jumpLabel(item) {
+  if (item.jumpTarget === 'ORDER' || item.orderId) return '订单详情';
   if (item.type === NOTIFY_TYPE.STUCK) return '订单列表';
   if (item.type === NOTIFY_TYPE.HANDOVER) return '交接日志';
   return '系统通知';
 }
 function jumpTarget(item) {
+  if (item.jumpTarget === 'ORDER' || item.orderId) {
+    // 优先用订单号定位（订单列表支持 orderNo 预填）；无订单号时按 ID 跳订单管理列表
+    return { path: '/orders/manage', query: { tab: 'order', orderNo: item.orderNo || '' } };
+  }
   if (item.type === NOTIFY_TYPE.STUCK) return { path: '/orders/manage', query: { tab: 'order' } };
   if (item.type === NOTIFY_TYPE.HANDOVER) return '/handover/log';
   return '/notify';
@@ -80,7 +88,8 @@ async function handleView(item) {
     try {
       await notifyApi.markRead(item.id);
       item.read = true;
-      notify.syncTrayBadge();
+      // 本地乐观减角标：不等后端 UNREAD 推送，铃铛/托盘角标立即减（后端权威随后校准）
+      notify.decrementBadge(1);
     } catch {
       // 接口不可用时（本地 mock 环境）回落到本地标记；真实环境 id 不在 store 中则为空操作
       notify.markRead(item.id);
@@ -111,7 +120,8 @@ async function handleMarkAllRead() {
     if (results[idx].status === 'fulfilled') item.read = true;
   });
   notify.items = items.value;
-  notify.syncTrayBadge();
+  // 成功条数乐观减角标（全部成功则清零）
+  notify.decrementBadge(ok);
   if (ok === results.length) {
     show('已全部标记为已读', 'success');
   } else {
@@ -158,7 +168,7 @@ onMounted(() => {
           <div class="item-head">
             <span v-if="!item.read" class="unread-dot" title="未读" />
             <strong class="item-title">{{ item.title }}</strong>
-            <span class="item-time">{{ relativeTime(item.time) }}</span>
+            <span class="item-time">{{ relativeTime(item) }}</span>
           </div>
           <p class="item-content">{{ item.content }}</p>
         </div>
