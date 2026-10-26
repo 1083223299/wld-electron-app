@@ -95,6 +95,10 @@ async function handleView(item) {
       notify.markRead(item.id);
       notify.syncTrayBadge();
     }
+    // 已读完后若已无未读，显式收起托盘冒泡（冒泡以渲染进程未读列表为权威，已读项应消失）
+    if (!items.value.some((i) => !i.read) && window.notifyBridge && window.notifyBridge.setTrayList) {
+      window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
+    }
   }
   router.push(jumpTarget(item));
 }
@@ -122,6 +126,12 @@ async function handleMarkAllRead() {
   notify.items = items.value;
   // 成功条数乐观减角标（全部成功则清零）
   notify.decrementBadge(ok);
+  // 全部已读成功：显式收起托盘冒泡（冒泡以渲染进程未读列表为权威，已读项应消失）
+  if (ok === results.length && !items.value.some((i) => !i.read)) {
+    if (window.notifyBridge && window.notifyBridge.setTrayList) {
+      window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
+    }
+  }
   if (ok === results.length) {
     show('已全部标记为已读', 'success');
   } else {

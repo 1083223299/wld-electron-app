@@ -834,9 +834,13 @@ function setupNotifyBridge() {
   });
 
   // 渲染进程上报未读列表（常驻冒泡列表数据源）
+  // 语义：渲染进程的「未读列表」为权威——已读的消息从冒泡消失，新消息由 notify:incoming 并入
   ipcMain.on('notify:tray-list', (_event, payload = {}) => {
-    trayUnreadItems = Array.isArray(payload.items) ? payload.items : [];
-    // 常驻冒泡列表已显示时刷新；全部已读则自动收起
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    // 空列表且未显式 force：视为渲染进程列表尚未同步到刚推送的新消息（如离线补提醒冒泡刚弹出），
+    // 保留现有冒泡，避免「弹出一闪而过」；已读/登出由 force 显式清空收起
+    if (!items.length && !payload.force) return;
+    trayUnreadItems = items;
     refreshNotifyBubble();
   });
 }

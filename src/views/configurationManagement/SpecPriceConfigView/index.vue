@@ -55,7 +55,6 @@ function backToList() {
     <div v-if="view === 'list'" class="list-panel">
       <div class="panel-head">
         <h3>自定义规格价格配置</h3>
-        <p class="head-note">注：在游戏管理中维护的游戏并不全在此处展示，此处展示的游戏都需要开发配置游戏特殊规格。</p>
       </div>
       <div class="game-entry-table">
         <div class="g-row g-head">

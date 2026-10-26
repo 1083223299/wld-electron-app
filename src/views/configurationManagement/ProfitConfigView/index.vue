@@ -98,11 +98,6 @@ async function handleSubmit() {
         </div>
       </div>
 
-      <div class="profit-note">
-        <p>1、维护俱乐部、打手分润，平台分润自动计算，总值不得超过 100%。</p>
-        <p>2、注意：修改后的数据仅针对后续新订单生效。</p>
-      </div>
-
       <div class="profit-actions">
         <button class="btn btn-primary" :disabled="submitting || loading" @click="handleSubmit">
           {{ submitting ? '提交中…' : '提交' }}

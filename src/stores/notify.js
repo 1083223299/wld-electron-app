@@ -136,7 +136,7 @@ export const useNotifyStore = defineStore('notify', {
       if (window.notifyBridge) {
         try {
           window.notifyBridge.setTrayBadge('');
-          window.notifyBridge.setTrayList([]);
+          window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
           window.notifyBridge.clearFlash();
         } catch {
           /* 主进程方法缺失时忽略 */
@@ -295,6 +295,12 @@ export const useNotifyStore = defineStore('notify', {
 
         if (fresh.length && window.notifyBridge) {
           fresh.forEach((item) => {
+            // 先同步进渲染进程列表（未读、置顶），保证后续托盘未读列表（以渲染进程为权威）包含这些消息，
+            // 不会被同步覆盖掉；同时保留后端权威字段
+            const norm = normalize(item);
+            if (norm) {
+              this.items = [norm, ...this.items].slice(0, MAX_ITEMS);
+            }
             if (window.notifyBridge.notifyIncoming) {
               window.notifyBridge.notifyIncoming({
                 id: item.id,
@@ -464,16 +470,24 @@ export const useNotifyStore = defineStore('notify', {
     markRead(id) {
       const item = this.items.find((i) => i.id === id);
       if (item) item.read = true;
+      // 全部已读后显式收起冒泡（主进程空列表默认保留，需 force 才收起）
+      if (!this.items.some((i) => !i.read) && window.notifyBridge && window.notifyBridge.setTrayList) {
+        window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
+      }
       this.syncTrayBadge();
     },
 
-    /** 全部标记已读，并停止托盘闪烁、清除托盘角标 */
+    /** 全部标记已读，并停止托盘闪烁、清除托盘角标、收起冒泡 */
     markAllRead() {
       this.items.forEach((i) => {
         i.read = true;
       });
       if (window.notifyBridge && window.notifyBridge.clearFlash) {
         window.notifyBridge.clearFlash();
+      }
+      // 显式收起冒泡（force 才允许空列表覆盖收起）
+      if (window.notifyBridge && window.notifyBridge.setTrayList) {
+        window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
       }
       this.syncTrayBadge();
     },
