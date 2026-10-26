@@ -35,8 +35,8 @@
             @click="openNotify"
           >
             <span class="notice-icon">🔔</span>
-            <span v-if="notify.unreadCount" class="notice-badge">
-              {{ notify.unreadCount > 99 ? '99+' : notify.unreadCount }}
+            <span v-if="notify.badgeText" class="notice-badge">
+              {{ notify.badgeText }}
             </span>
           </button>
 
