@@ -53,8 +53,7 @@ export const ORDER_TYPE = {
 };
 
 /**
- * 下单方式（原型：订单列表新增筛选项「下单方式」，常规下单 / 用户自定义下单）
- * 【枚举值待后端确认】先按 NORMAL=常规下单 / CUSTOM=用户自定义下单 拟定，联调以后端为准
+ * 下单方式（placeMode：NORMAL=常规下单 / CUSTOM=用户自定义下单）
  */
 export const ORDER_MODE = {
   NORMAL: '常规下单',
@@ -118,7 +117,7 @@ export const TYPE_OPTIONS = Object.entries(ORDER_TYPE)
   .map(([value, label]) => ({ label, value }));
 export const CHANNEL_OPTIONS = Object.entries(CHANNEL_CODES).map(([value, label]) => ({ label, value }));
 
-// 下单方式选项（常规下单 / 用户自定义下单；枚举待后端确认）
+// 下单方式选项（placeMode: NORMAL / CUSTOM）
 export const ORDER_MODE_OPTIONS = Object.entries(ORDER_MODE).map(([value, label]) => ({ label, value }));
 
 /* ================= 查询参数组装（空值自动剔除，数组 join 逗号） ================= */
@@ -144,7 +143,7 @@ export const orderApi = {
    *   后续有时间再统一为单查询方式 orderApi.list({ scope, ...params })
    * @param {{scope?:string,page?:number,pageSize?:number,orderNo?:string,thirdOrderNo?:string,
    *          status?:string,auditStatus?:string,orderType?:string,channelCode?:string,gameId?:number,
-   *          ownerId?:number,frozen?:number,afterSale?:number,from?:string,to?:string}} params
+   *          ownerId?:number,frozen?:number,afterSale?:number,placeMode?:'NORMAL'|'CUSTOM',from?:string,to?:string}} params
    * @returns {Promise<{total:number,page:number,pageSize:number,list:Array}>}
    */
   list: (params = {}) => request.get(`/api/admin/orders${buildQuery(params)}`),

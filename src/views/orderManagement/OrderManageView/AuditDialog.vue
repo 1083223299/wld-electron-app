@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, watch } from 'vue';
 import { useToast } from '../../../composables/useToast';
 import { orderApi, slotSourceText } from '../../../api/modules/order';
+import OrderLogTimeline from './OrderLogTimeline.vue';
 
 /**
  * 订单审核弹窗内容（接口联调 + 原型 UI 恢复）
@@ -144,14 +145,7 @@ defineExpose({ submit });
     <!-- 订单日志 -->
     <section class="au-section">
       <h4>订单日志</h4>
-      <ul v-if="logs.length" class="log-list">
-        <li v-for="(log, i) in logs" :key="i">
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-text">{{ log.text }}</span>
-          <span class="log-op">操作人：{{ log.op }}</span>
-        </li>
-      </ul>
-      <p v-else class="muted-text">暂无日志</p>
+      <OrderLogTimeline :logs="logs" />
     </section>
 
     <!-- 完成凭证（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） -->
@@ -408,35 +402,6 @@ defineExpose({ submit });
   color: var(--text-faint);
   font-size: 12.5px;
   margin: 0;
-}
-
-.log-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.log-list li {
-  display: grid;
-  grid-template-columns: 150px 1fr auto;
-  gap: 12px;
-  align-items: baseline;
-  font-size: 12.5px;
-  color: var(--text-sub);
-  padding-left: 12px;
-  border-left: 2px solid var(--border);
-}
-
-.log-time {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-}
-
-.log-op {
-  color: var(--text-faint);
-  font-size: 12px;
 }
 
 .form-tip {

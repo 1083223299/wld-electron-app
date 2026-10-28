@@ -26,6 +26,7 @@ import { orderConfigApi } from './modules/orderConfig';
  *       新通知 { type:'NOTIFICATION', id, scene, sceneLabel, title, content,
  *                orderId, jumpTarget, timeText, unread, badge }
  *       标记已读后 { type:'UNREAD', unread, badge }（仅角标，不入列表）
+ *       心跳 { type:'PING' } → 客户端回复 { type:'PONG' }（只保活，不作为业务通知）
  *       badge 超过 99 为 '99+'
  *     - 兼容旧约定兜底：{ type:'stuck'|'handover'|'system', ... } / { type:'notify', payload } / 数组
  * ---------------------------------------------------------------
@@ -224,11 +225,10 @@ function startMockEngine(emit) {
 /* ================= 真实 WebSocket 客户端 ================= */
 
 /** 创建一条 WS 连接的公共处理（重连退避 + 假死检测看门狗），解析逻辑由调用方传入 */
-function createWsConnection({ base, onMessage, onStatus }) {
+function createWsConnection({ base, onMessage, onStatus, idleTimeoutMs = notifyConfig.idleTimeoutMs }) {
   const {
     reconnectBaseMs = 3000,
     reconnectMaxMs = 30000,
-    idleTimeoutMs = 45000,
   } = notifyConfig;
   let ws = null;
   let closed = false;
@@ -285,7 +285,9 @@ function createWsConnection({ base, onMessage, onStatus }) {
     ws.onmessage = (ev) => {
       // 任何服务端消息都说明连接存活：重置假死检测
       armWatchdog();
-      onMessage(ev);
+      onMessage(ev, (data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+      });
     };
     ws.onclose = () => {
       clearWatchdog();
@@ -323,7 +325,7 @@ function createWsConnection({ base, onMessage, onStatus }) {
 function startRealSocket(emit, onStatus) {
   return createWsConnection({
     base: config.websocketURL,
-    onMessage: (ev) => {
+    onMessage: (ev, send) => {
       let data = null;
       try {
         data = JSON.parse(ev.data);
@@ -333,6 +335,10 @@ function startRealSocket(emit, onStatus) {
       const rawList = Array.isArray(data) ? data : [data];
       rawList.forEach((raw) => {
         if (!raw || typeof raw !== 'object') return;
+        if (raw.type === 'PING') {
+          send(JSON.stringify({ type: 'PONG' }));
+          return;
+        }
         // 后端实时通知：type=NOTIFICATION / UNREAD 原样交给 store 处理
         if (raw.type === WS_MSG_TYPE.NOTIFICATION || raw.type === WS_MSG_TYPE.UNREAD) {
           emit(raw);
@@ -418,6 +424,7 @@ export function parseAdminAlert(data) {
 function startAdminAlertSocket(emit, onStatus) {
   return createWsConnection({
     base: config.adminWSURL || '',
+    idleTimeoutMs: 0,
     onMessage: (ev) => {
       let data = null;
       try {

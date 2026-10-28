@@ -1,3 +1,4 @@
+// SkuMapping 组件，用于管理游戏的 SKU 映射
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import AppModal from '../../../components/AppModal.vue';
@@ -479,17 +480,19 @@ watch(currentGameId, () => {
 }
 
 .back-link {
-  border: none;
-  background: transparent;
-  color: #2563eb;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 11px;
+  background: var(--bg-card);
+  color: var(--text-sub);
   cursor: pointer;
-  font-size: 13px;
-  padding: 0;
+  font-size: 12.5px;
+  transition: color .16s ease, border-color .16s ease, background .16s ease;
 }
 
-.back-link:hover {
+/* .back-link:hover {
   text-decoration: underline;
-}
+} */
 
 .sku-title {
   margin: 0;

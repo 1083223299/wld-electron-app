@@ -1,5 +1,6 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
@@ -9,6 +10,7 @@ import { playerApplicationApi } from '../../../api/modules/player';
 import { gameApi } from '../../../api/modules/game';
 
 const { show } = useToast();
+const route = useRoute();
 
 /* ===== 筛选（原型：打手名称模糊 / 打手手机号完全匹配 / 状态：审核中、已驳回 / 申请时间区间） ===== */
 const filter = reactive({
@@ -23,11 +25,12 @@ const { page, pageSize, onPageSizeChange, onPageChange, restoreFilter, rememberF
 });
 restoreFilter(filter);
 
-/** 状态枚举：PENDING=审核中 / REJECTED=已驳回（接口待后端确认，先按此拟定） */
-const STATUS = { PENDING: '审核中', REJECTED: '已驳回' };
+/** 状态枚举与打手入驻审核接口一致。 */
+const STATUS = { PENDING: '审核中', REJECTED: '已驳回', APPROVED: '已通过' };
 const STATUS_OPTIONS = [
   { label: '审核中', value: 'PENDING' },
   { label: '已驳回', value: 'REJECTED' },
+  { label: '已通过', value: 'APPROVED' },
 ];
 
 const searchFields = [
@@ -68,6 +71,7 @@ const columns = [
 const rows = ref([]);
 const total = ref(0);
 const loading = ref(false);
+const notificationTarget = ref({ applicationId: '', playerId: '' });
 
 /** 时间筛选传参：yyyy-MM-ddTHH:mm:ss */
 function formatDateTime(d) {
@@ -78,10 +82,14 @@ function formatDateTime(d) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+function formatAppliedAt(value) {
+  return value ? String(value).replace('T', ' ') : '—';
+}
+
 function mapRow(item = {}) {
   return {
     id: item.id,
-    name: item.name || '',
+    name: item.realName || item.name || '',
     phone: item.phone || '',
     // 原型：俱乐部名称当前默认都是加入未来电竞，空值兜底展示「未来电竞」
     clubName: item.clubName || '未来电竞',
@@ -101,6 +109,7 @@ async function fetchList() {
       pageSize: pageSize.value,
       name: filter.name,
       phone: filter.phone,
+      ...notificationTarget.value,
       status: filter.status,
       appliedFrom: formatDateTime(from),
       appliedTo: formatDateTime(to),
@@ -108,17 +117,43 @@ async function fetchList() {
     const list = res && Array.isArray(res.list) ? res.list : Array.isArray(res) ? res : [];
     rows.value = list.map(mapRow);
     total.value = (res && res.total) || list.length;
-  } catch {
+  } catch (error) {
     rows.value = [];
     total.value = 0;
+    show(error?.message || '打手审核列表加载失败', 'error');
   } finally {
     loading.value = false;
   }
 }
 
-onMounted(fetchList);
+function applyNotificationSearch(query = {}) {
+  const applicationId = String(query.applicationId || '');
+  const playerId = String(query.playerId || '');
+  const name = String(query.name || '');
+  const phone = String(query.phone || '');
+  notificationTarget.value = { applicationId, playerId };
+  if (!applicationId && !playerId && !name && !phone) {
+    fetchList();
+    return;
+  }
+
+  filter.name = name;
+  filter.phone = phone;
+  filter.status = '';
+  filter.appliedTime = [];
+  page.value = 1;
+  fetchList();
+}
+
+onMounted(() => applyNotificationSearch(route.query));
+
+watch(
+  () => route.query,
+  (query) => applyNotificationSearch(query)
+);
 
 function handleSearch(values) {
+  notificationTarget.value = { applicationId: '', playerId: '' };
   Object.assign(filter, values);
   rememberFilter(filter, true);
   page.value = 1;
@@ -126,6 +161,7 @@ function handleSearch(values) {
 }
 
 function handleReset() {
+  notificationTarget.value = { applicationId: '', playerId: '' };
   filter.name = '';
   filter.phone = '';
   filter.status = '';
@@ -153,11 +189,10 @@ function getStatusClass(status) {
 const specDialogVisible = ref(false);
 const specLoading = ref(false);
 const specSaving = ref(false);
-const specLoadError = ref(false);
 const specCatalogError = ref(false);
 const currentRow = ref(null);
-const specCatalog = ref([]); // [{ gameId, gameName, specs: [{id,name}] }]
-const specGameRows = ref([]);
+const specCatalog = ref([]); // 游戏目录及各游戏的可选规格
+const specRows = ref([]);
 
 async function loadSpecCatalog() {
   const games = await gameApi.listAll();
@@ -167,47 +202,45 @@ async function loadSpecCatalog() {
       if (Array.isArray(game.specs) && game.specs.length) {
         specs = game.specs;
       } else {
-        try {
-          specs = await gameApi.specs(game.id);
-        } catch {
-          /* 单游戏规格失败不阻塞 */
-        }
+        specs = await gameApi.specs(game.id);
       }
       return {
-        gameId: game.id,
+        gameId: String(game.id),
         gameName: game.name,
-        specs: (specs || []).map((s) => ({ id: Number(s.id ?? s), name: s.name ?? s })),
+        specs: (specs || [])
+          .map((spec) => ({ id: Number(spec.id ?? spec), name: spec.name ?? String(spec) }))
+          .filter((spec) => Number.isFinite(spec.id) && spec.id > 0),
       };
     }),
   );
   specCatalog.value = catalog;
 }
 
-function toggleGameAll(row) {
-  if (specSaving.value || !row.specs.length) return;
-  row.all = !row.all;
-  if (row.all) row.checked.clear();
+function gameForRow(row) {
+  return specCatalog.value.find((game) => game.gameId === row.gameId);
 }
 
-function toggleSpec(row, specId) {
-  if (specSaving.value || row.all) return;
-  if (row.checked.has(specId)) row.checked.delete(specId);
-  else row.checked.add(specId);
-  row.all = row.specs.length > 0 && row.checked.size === row.specs.length;
-  if (row.all) row.checked.clear();
+function addSpecRow() {
+  if (!specSaving.value) specRows.value.push({ gameId: '', specId: '' });
+}
+
+function removeSpecRow(index) {
+  if (!specSaving.value && specRows.value.length > 1) specRows.value.splice(index, 1);
+}
+
+function changeSpecGame(row) {
+  row.specId = '';
 }
 
 async function openApprove(row) {
   currentRow.value = row;
-  specGameRows.value = [];
-  specLoadError.value = false;
+  specRows.value = [{ gameId: '', specId: '' }];
   specCatalogError.value = false;
   specDialogVisible.value = true;
   specLoading.value = true;
   try {
     await loadSpecCatalog();
-    specGameRows.value = specCatalog.value.map((g) => ({ ...g, all: false, checked: new Set() }));
-  } catch (e) {
+  } catch {
     specCatalogError.value = true;
   } finally {
     specLoading.value = false;
@@ -216,17 +249,32 @@ async function openApprove(row) {
 
 async function submitApprove() {
   if (!currentRow.value) return;
-  const specs = specGameRows.value
-    .filter((g) => g.all || g.checked.size > 0)
-    .map((g) => ({ gameId: g.gameId, all: g.all, specIds: g.all ? [] : [...g.checked] }));
+  const specIds = [];
+  for (const [index, row] of specRows.value.entries()) {
+    const game = gameForRow(row);
+    if (!game || !row.specId) {
+      return show(`请完整选择第 ${index + 1} 行的游戏和规格`, 'warning');
+    }
+    if (row.specId === 'ALL') {
+      specIds.push(...game.specs.map((spec) => spec.id));
+    } else {
+      const specId = Number(row.specId);
+      if (!game.specs.some((spec) => spec.id === specId)) {
+        return show(`第 ${index + 1} 行的规格无效，请重新选择`, 'warning');
+      }
+      specIds.push(specId);
+    }
+  }
+  const uniqueSpecIds = [...new Set(specIds)];
+  if (!uniqueSpecIds.length) return show('请至少选择一个可接单规格', 'warning');
   specSaving.value = true;
   try {
-    await playerApplicationApi.approve(currentRow.value.id, { specs });
+    await playerApplicationApi.approve(currentRow.value.id, uniqueSpecIds);
     show('已通过，打手入驻成功', 'success');
     specDialogVisible.value = false;
     fetchList();
-  } catch {
-    /* 错误提示由 request.js 统一弹出 */
+  } catch (error) {
+    show(error?.message || '审核通过失败，请稍后重试', 'error');
   } finally {
     specSaving.value = false;
   }
@@ -250,12 +298,12 @@ async function submitReject() {
   if (reason.length > 200) return show('驳回原因不能超过200字', 'warning');
   rejectSaving.value = true;
   try {
-    await playerApplicationApi.reject(currentRow.value.id, { reason });
+    await playerApplicationApi.reject(currentRow.value.id, reason);
     show('已驳回', 'success');
     rejectDialogVisible.value = false;
     fetchList();
-  } catch {
-    /* 错误提示由 request.js 统一弹出 */
+  } catch (error) {
+    show(error?.message || '驳回失败，请稍后重试', 'error');
   } finally {
     rejectSaving.value = false;
   }
@@ -289,6 +337,9 @@ async function submitReject() {
         <span v-if="row.lastRejectReason" class="reject-reason">{{ row.lastRejectReason }}</span>
         <span v-else>—</span>
       </template>
+      <template #cell-appliedAt="{ row }">
+        {{ formatAppliedAt(row.appliedAt) }}
+      </template>
       <template #cell-op="{ row }">
         <div v-if="row.statusCode === 'PENDING'" class="action-group">
           <button class="link-btn success" @click="openApprove(row)">通过</button>
@@ -299,51 +350,72 @@ async function submitReject() {
     </DataTable>
 
     <!-- 通过：维护可接单规格 -->
-    <AppModal v-model="specDialogVisible" title="通过 - 维护可接单规格" width="640px">
+    <AppModal v-model="specDialogVisible" title="通过 - 维护可接单规格" width="680px">
       <div class="spec-dialog-card player-modal-content">
         <div v-if="specLoading" class="spec-loading">规格加载中…</div>
         <template v-else>
-          <div v-if="specLoadError || specCatalogError" class="spec-empty">
+          <div v-if="specCatalogError" class="spec-empty">
             规格加载失败，请检查接口或稍后重试
           </div>
-          <div v-else-if="!specGameRows.length" class="spec-empty">暂无游戏规格数据，请先在游戏管理中配置游戏与规格</div>
-          <div v-else class="spec-game-list">
-            <div v-for="game in specGameRows" :key="game.gameId" class="spec-game-item">
-              <div class="spec-game-head">
-                <span class="spec-game-name">{{ game.gameName }}</span>
-                <label class="spec-all-toggle" :class="{ muted: !game.specs.length }">
-                  <input
-                    type="checkbox"
-                    :checked="game.all"
-                    :disabled="specSaving || !game.specs.length"
-                    @change="toggleGameAll(game)"
-                  />
-                  <span>全部规格</span>
-                </label>
-              </div>
-              <div v-if="game.specs.length" class="spec-tags">
-                <label
-                  v-for="spec in game.specs"
+          <div v-else-if="!specCatalog.length" class="spec-empty">暂无游戏数据，请先在游戏管理中配置游戏与规格</div>
+          <div v-else class="spec-choice-list">
+            <label class="field-label required">可接单规格</label>
+            <div v-for="(row, index) in specRows" :key="index" class="spec-choice-row">
+              <select
+                v-model="row.gameId"
+                :disabled="specSaving"
+                aria-label="选择游戏"
+                @change="changeSpecGame(row)"
+              >
+                <option value="" disabled>请选择游戏</option>
+                <option v-for="game in specCatalog" :key="game.gameId" :value="game.gameId">
+                  {{ game.gameName }}
+                </option>
+              </select>
+              <select
+                v-model="row.specId"
+                :disabled="specSaving || !gameForRow(row)?.specs.length"
+                aria-label="选择规格"
+              >
+                <option value="" disabled>请选择规格</option>
+                <option
+                  v-if="gameForRow(row)?.specs.length"
+                  value="ALL"
+                >全部规格</option>
+                <option
+                  v-for="spec in gameForRow(row)?.specs || []"
                   :key="spec.id"
-                  :class="['spec-tag', { active: game.all || game.checked.has(spec.id), disabled: game.all }]"
+                  :value="String(spec.id)"
                 >
-                  <input
-                    type="checkbox"
-                    :checked="game.all || game.checked.has(spec.id)"
-                    :disabled="game.all || specSaving"
-                    @change="toggleSpec(game, spec.id)"
-                  />
-                  <span>{{ spec.name }}</span>
-                </label>
+                  {{ spec.name }}
+                </option>
+              </select>
+              <div class="spec-row-actions">
+                <button
+                  v-if="specRows.length > 1"
+                  type="button"
+                  class="spec-row-action remove"
+                  :disabled="specSaving"
+                  aria-label="删除规格行"
+                  @click="removeSpecRow(index)"
+                >−</button>
+                <button
+                  v-if="index === specRows.length - 1"
+                  type="button"
+                  class="spec-row-action add"
+                  :disabled="specSaving"
+                  aria-label="新增规格行"
+                  @click="addSpecRow"
+                >+</button>
               </div>
-              <div v-else class="spec-game-none">该游戏暂未配置规格</div>
             </div>
+            <p class="spec-choice-hint">选择“全部规格”会提交该游戏当前配置的全部规格。</p>
           </div>
         </template>
       </div>
       <template #footer>
-        <button class="btn btn-plain" @click="specDialogVisible = false">取消</button>
-        <button class="btn btn-primary" :disabled="specLoading || specSaving" @click="submitApprove">
+        <button class="btn btn-plain" :disabled="specSaving" @click="specDialogVisible = false">取消</button>
+        <button class="btn btn-primary" :disabled="specLoading || specSaving || specCatalogError || !specCatalog.length" @click="submitApprove">
           {{ specSaving ? '提交中…' : '确定' }}
         </button>
       </template>
@@ -444,84 +516,96 @@ async function submitReject() {
   font-size: 13px;
 }
 
-.spec-game-list {
+.spec-choice-list {
   display: grid;
-  gap: 12px;
-  max-height: 46vh;
-  overflow-y: auto;
-  padding-right: 4px;
+  gap: 14px;
 }
 
-.spec-game-item {
+.spec-choice-row {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
   gap: 10px;
-  padding: 14px 16px;
+}
+
+.spec-choice-row select {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
   border: 1px solid #e3e7f0;
-  border-radius: 14px;
-  background: #fbfcfe;
+  border-radius: 10px;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.spec-game-head {
+.spec-choice-row select:focus {
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 3px var(--primary-border);
+}
+
+.spec-choice-row select:disabled {
+  background: #f5f6fa;
+  color: #98a2b3;
+  cursor: not-allowed;
+}
+
+.spec-row-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.spec-game-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.spec-all-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: #475467;
-  cursor: pointer;
-  user-select: none;
-}
-
-.spec-all-toggle.muted { opacity: 0.5; cursor: not-allowed; }
-.spec-all-toggle input { width: auto; accent-color: var(--primary); }
-
-.spec-tags {
-  display: flex;
-  flex-wrap: wrap;
   gap: 8px;
 }
 
-.spec-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+.spec-row-action {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
   border: 1px solid #e3e7f0;
-  border-radius: 999px;
-  background: #f8fafc;
+  border-radius: 10px;
+  background: #fff;
   color: #475467;
-  font-size: 12.5px;
+  font-size: 21px;
+  line-height: 1;
   cursor: pointer;
-  user-select: none;
   transition: all 0.16s ease;
 }
 
-.spec-tag:hover { border-color: #c9b8ff; color: var(--primary); }
-
-.spec-tag.active {
-  border-color: transparent;
-  background: var(--primary-faint);
+.spec-row-action.add {
+  border-color: var(--primary-border-strong);
   color: var(--primary);
-  font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--primary-border-strong);
 }
 
-.spec-tag.disabled { cursor: not-allowed; opacity: 0.75; }
-.spec-tag input { width: auto; margin: 0; accent-color: var(--primary); }
-.spec-game-none { color: #98a2b3; font-size: 12px; }
+.spec-row-action:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-faint);
+}
+
+.spec-row-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.spec-choice-hint {
+  margin: -4px 0 0;
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .spec-choice-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .spec-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
 
 /* 驳回弹窗 */
 .field-group { display: grid; gap: 8px; }

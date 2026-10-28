@@ -1,3 +1,4 @@
+// ChannelListView 组件，用于管理渠道列表及其新增、编辑、删除操作
 <script setup>
 import { onMounted, reactive, ref } from 'vue';
 import AppModal from '../../../components/AppModal.vue';

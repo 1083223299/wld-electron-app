@@ -21,6 +21,17 @@
             </span>
           </template>
         </div>
+        <button
+          class="page-refresh-btn"
+          type="button"
+          aria-label="刷新页面"
+          title="刷新页面"
+          @click="refreshPage"
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <path d="M13.2 5.2A5.7 5.7 0 0 0 3 4L1.8 5.3M2 2.8v2.7h2.7M2.8 10.8A5.7 5.7 0 0 0 13 12l1.2-1.3M14 13.2v-2.7h-2.7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.4" />
+          </svg>
+        </button>
 
         <div class="business-actions">
           <ThemePanel />
@@ -134,6 +145,10 @@ const breadcrumbs = computed(() => {
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
+}
+
+function refreshPage() {
+  window.location.reload();
 }
 
 /* ================= 窗口控制（桌面端顶栏） ================= */
@@ -253,6 +268,29 @@ function handleCommand(command) {
   gap: 8px;
   font-size: 14px;
   color: var(--text-sub);
+}
+
+.page-refresh-btn {
+  width: 30px;
+  height: 30px;
+  margin-left: 8px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-sub);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  -webkit-app-region: no-drag;
+}
+
+.page-refresh-btn:hover {
+  border-color: var(--primary-border-strong);
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
 .app-name {

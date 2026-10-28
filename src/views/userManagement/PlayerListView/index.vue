@@ -126,9 +126,9 @@ const getAssetPlaceholder = computed(() => {
 });
 
 const getAssetReasonLabel = computed(() => {
-  if (assetForm.operation === '充值') return '充值原因（会在C端展示）';
-  if (assetForm.operation === '扣减') return '扣减原因（会在C端展示）';
-  return '抵扣原因（会在C端展示）';
+  if (assetForm.operation === '充值') return '充值原因';
+  if (assetForm.operation === '扣减') return '扣减原因';
+  return '抵扣原因';
 });
 
 const maxUploadFiles = 6;
@@ -778,8 +778,8 @@ async function submitAsset() {
       action: ACTION_MAP[assetForm.operation],
       amount,
       reason: assetForm.reason.trim(),
-      // 凭证文件（{url,name} 对象数组），保存原始文件名供回显
-      files: assetForm.files.map((f) => ({ url: f.url, name: f.name })),
+      // wallet-adjust 接口的 files 使用 URL 字符串；本地仍保留 name 用于回显。
+      files: assetForm.files.map((f) => f.url),
     });
     // 用服务端返回的余额回写（data: { ok, bizId, income, deposit, walletFrozen }）
     if (res) {

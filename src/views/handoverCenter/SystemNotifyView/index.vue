@@ -67,12 +67,28 @@ function relativeTime(item) {
 
 /* ================= 跳转（后端 jumpTarget=ORDER 进订单，其余按消息类型） ================= */
 function jumpLabel(item) {
+  if (isPlayerApplication(item)) return '打手审核';
   if (item.jumpTarget === 'ORDER' || item.orderId) return '订单详情';
   if (item.type === NOTIFY_TYPE.STUCK) return '订单列表';
   if (item.type === NOTIFY_TYPE.HANDOVER) return '交接日志';
   return '系统通知';
 }
+function isPlayerApplication(item) {
+  const marker = `${item.scene || ''} ${item.sceneLabel || ''} ${item.title || ''} ${item.content || ''}`;
+  return /PLAYER.*(APPLICATION|APPLY|JOIN)|打手.{0,6}(入驻|申请)|入驻申请/.test(marker.toUpperCase());
+}
 function jumpTarget(item) {
+  if (isPlayerApplication(item)) {
+    return {
+      path: '/users/player-audit',
+      query: {
+        applicationId: item.applicationId || item.bizKey || '',
+        playerId: item.playerId || '',
+        name: item.playerName || '',
+        phone: item.phone || '',
+      },
+    };
+  }
   if (item.jumpTarget === 'ORDER' || item.orderId) {
     // 优先用订单号定位（订单列表支持 orderNo 预填）；无订单号时按 ID 跳订单管理列表
     return { path: '/orders/manage', query: { tab: 'order', orderNo: item.orderNo || '' } };

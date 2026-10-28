@@ -62,18 +62,21 @@ onBeforeUnmount(() => {
 .topbar {
   position: fixed;
   top: 10px;
-  right: 14px;
+  right: 0;
   z-index: 200;
   display: flex;
   align-items: center;
   height: 34px;
   padding-left: 18px; /* 左侧留白作为窗口拖动区域 */
-  border-radius: 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-soft);
-  box-shadow: var(--shadow-sm, 0 2px 10px rgba(0, 0, 0, 0.08));
+  /* border-radius: 12px; */
+  /* background: var(--bg-elevated); */
+  border: 0px solid var(--border-soft);
+  /* box-shadow: var(--shadow-sm, 0 2px 10px rgba(0, 0, 0, 0.08)); */
   -webkit-app-region: drag;
   user-select: none;
+  width: 100%;
+  justify-content: flex-end;
+  background: #ffffff00;
 }
 
 .window-controls {

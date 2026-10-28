@@ -3,6 +3,7 @@ import { computed, onMounted, reactive } from 'vue';
 import { useToast } from '../../../composables/useToast';
 import { STATUS_CLASS } from './mockData';
 import { slotSourceText, orderApi } from '../../../api/modules/order';
+import OrderLogTimeline from './OrderLogTimeline.vue';
 
 /**
  * 订单详情弹窗内容（查看视图，接口联调 + 原型 UI 恢复）
@@ -133,11 +134,15 @@ async function copyText(text) {
       <div class="kv-grid">
         <div class="kv">
           <span>订单号</span>
-          <strong class="copyable" @click="copyText(row.orderNo)">{{ row.orderNo }}<em>复制</em></strong>
+          <strong class="copyable" role="button" tabindex="0" aria-label="复制订单号" title="复制" @click="copyText(row.orderNo)" @keydown.enter="copyText(row.orderNo)">
+            {{ row.orderNo }}<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+          </strong>
         </div>
         <div class="kv">
           <span>第三方订单号</span>
-          <strong class="copyable" @click="copyText(row.thirdOrderNo)">{{ row.thirdOrderNo }}<em>复制</em></strong>
+          <strong class="copyable" role="button" tabindex="0" aria-label="复制第三方订单号" title="复制" @click="copyText(row.thirdOrderNo)" @keydown.enter="copyText(row.thirdOrderNo)">
+            {{ row.thirdOrderNo }}<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+          </strong>
         </div>
         <div class="kv"><span>渠道</span><strong>{{ row.channel || '—' }}</strong></div>
         <div class="kv"><span>游戏名称</span><strong>{{ row.gameName || '—' }}</strong></div>
@@ -154,12 +159,16 @@ async function copyText(text) {
         </div>
         <div class="kv">
           <span>组队码</span>
-          <strong v-if="row.groupCode" class="copyable" @click="copyText(row.groupCode)">{{ row.groupCode }}<em>复制</em></strong>
+          <strong v-if="row.groupCode" class="copyable" role="button" tabindex="0" aria-label="复制组队码" title="复制" @click="copyText(row.groupCode)" @keydown.enter="copyText(row.groupCode)">
+            {{ row.groupCode }}<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+          </strong>
           <strong v-else>—</strong>
         </div>
         <div class="kv">
           <span>角色名</span>
-          <strong v-if="row.roleName" class="copyable" @click="copyText(row.roleName)">{{ row.roleName }}<em>复制</em></strong>
+          <strong v-if="row.roleName" class="copyable" role="button" tabindex="0" aria-label="复制角色名" title="复制" @click="copyText(row.roleName)" @keydown.enter="copyText(row.roleName)">
+            {{ row.roleName }}<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+          </strong>
           <strong v-else>—</strong>
         </div>
         <div class="kv"><span>创单时间</span><strong>{{ row.createTime || '—' }}</strong></div>
@@ -254,14 +263,7 @@ async function copyText(text) {
     <!-- 订单日志（接口：logs） -->
     <section class="detail-section">
       <h4>订单日志</h4>
-      <ul v-if="logs.length" class="log-list">
-        <li v-for="(log, i) in logs" :key="i">
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-text">{{ log.text }}</span>
-          <span class="log-op">操作人：{{ log.op }}</span>
-        </li>
-      </ul>
-      <p v-else class="muted-text">暂无日志</p>
+      <OrderLogTimeline :logs="logs" />
     </section>
 
     <!-- 完成凭证（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回） -->
@@ -405,13 +407,15 @@ async function copyText(text) {
   border-bottom-color: var(--primary);
 }
 
-.copyable em {
-  font-style: normal;
-  font-size: 11px;
+.copyable svg {
+  width: 15px;
+  height: 15px;
   color: var(--primary);
-  background: var(--primary-soft);
-  border-radius: 4px;
-  padding: 1px 6px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   flex: 0 0 auto;
 }
 
@@ -500,34 +504,6 @@ async function copyText(text) {
   color: var(--text-faint);
 }
 
-.log-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.log-list li {
-  display: grid;
-  grid-template-columns: 150px 1fr auto;
-  gap: 12px;
-  align-items: baseline;
-  font-size: 12.5px;
-  color: var(--text-sub);
-  padding-left: 12px;
-  border-left: 2px solid var(--border);
-}
-
-.log-time {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-}
-
-.log-op {
-  color: var(--text-faint);
-  font-size: 12px;
-}
 
 .form-tip {
   margin: 0;

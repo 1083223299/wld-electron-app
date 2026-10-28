@@ -67,6 +67,8 @@ function mapRow(item = {}) {
   return {
     id: item.id,
     orderNo: item.orderNo || '',
+    gameId: item.gameId,
+    specId: item.specId,
     channel: channelDisplay(item.channelCode),
     channelCode: item.channelCode,
     thirdOrderNo: item.thirdOrderNo || '',
@@ -183,13 +185,25 @@ async function submitClaim() {
       orderType !== undefined || playerCount !== undefined ||
       roleName !== undefined || teamCode !== undefined
     ) {
-      await orderApi.maintain(row.id, { orderType, playerCount, roleName, teamCode });
+      const detail = row.gameId != null && row.specId != null
+        ? null
+        : await orderApi.detail(row.id);
+      const gameId = row.gameId ?? detail?.gameId;
+      const specId = row.specId ?? detail?.specId;
+      await orderApi.maintain(row.id, {
+        ...(gameId != null && specId != null ? { gameId, specId } : {}),
+        orderType,
+        playerCount,
+        roleName,
+        teamCode,
+      });
     }
     claimVisible.value = false;
     show('认领成功，已进入订单列表', 'success');
     fetchHall();
   } catch {
-    /* 错误提示由 request.js 统一弹出 */
+    /* 错误提示由 request.js 统一弹出；回读大厅以移除已被领取的旧数据。 */
+    await fetchHall();
   }
 }
 

@@ -12,6 +12,7 @@ const form = reactive({
 
 const loading = ref(false);
 const submitting = ref(false);
+const loadError = ref('');
 
 /** 平台分润 = 100 - 俱乐部分润 - 打手分润（自动计算，只读展示） */
 const platformRate = computed(() => {
@@ -22,14 +23,15 @@ const platformRate = computed(() => {
 
 async function fetchConfig() {
   loading.value = true;
+  loadError.value = '';
   try {
     const res = await profitConfigApi.get();
     if (res) {
       form.clubRate = res.clubRate ?? res.club_rate ?? '';
       form.playerRate = res.playerRate ?? res.player_rate ?? '';
     }
-  } catch {
-    /* 读取失败静默，保持空表单 */
+  } catch (error) {
+    loadError.value = error?.message || '分润配置加载失败，请重试。';
   } finally {
     loading.value = false;
   }
@@ -42,8 +44,8 @@ function validate() {
   const player = Number(form.playerRate);
   if (form.clubRate === '' || Number.isNaN(club)) return '请填写俱乐部分润';
   if (form.playerRate === '' || Number.isNaN(player)) return '请填写打手分润';
-  if (club < 0 || club > 100) return '俱乐部分润需在 0-100 之间';
-  if (player < 0 || player > 100) return '打手分润需在 0-100 之间';
+  if (!Number.isInteger(club) || club < 0 || club > 100) return '俱乐部分润需为 0-100 的整数';
+  if (!Number.isInteger(player) || player < 0 || player > 99) return '打手分润需为 0-99 的整数';
   if (club + player > 100) return '俱乐部分润与打手分润之和不得超过 100%';
   return null;
 }
@@ -61,8 +63,8 @@ async function handleSubmit() {
       playerRate: Number(form.playerRate),
     });
     show('保存成功', 'success');
-  } catch {
-    /* 错误提示由 request.js 统一弹出 */
+  } catch (error) {
+    show(error?.message || '分润配置保存失败', 'error');
   } finally {
     submitting.value = false;
   }
@@ -73,11 +75,15 @@ async function handleSubmit() {
   <div class="list-page profit-config">
     <div class="profit-card">
       <h3 class="profit-title">用户自选规格-分润配置</h3>
+      <div v-if="loadError" class="profit-error" role="alert">
+        <span>{{ loadError }}</span>
+        <button type="button" @click="fetchConfig">重试</button>
+      </div>
 
       <div class="rate-row">
         <label class="rate-label">俱乐部分润</label>
         <div class="rate-input-wrap">
-          <input v-model="form.clubRate" type="number" min="0" max="100" step="0.01" placeholder="请输入比例" />
+          <input v-model="form.clubRate" type="number" min="0" max="100" step="1" placeholder="请输入比例" />
           <span class="rate-unit">%</span>
         </div>
       </div>
@@ -85,7 +91,7 @@ async function handleSubmit() {
       <div class="rate-row">
         <label class="rate-label">打手分润</label>
         <div class="rate-input-wrap">
-          <input v-model="form.playerRate" type="number" min="0" max="100" step="0.01" placeholder="请输入比例" />
+          <input v-model="form.playerRate" type="number" min="0" max="99" step="1" placeholder="请输入比例" />
           <span class="rate-unit">%</span>
         </div>
       </div>
@@ -125,6 +131,28 @@ async function handleSubmit() {
   font-size: 17px;
   font-weight: 700;
   color: var(--text-main);
+}
+
+.profit-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 20px;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 45, 32, 0.2);
+  border-radius: 8px;
+  background: rgba(217, 45, 32, 0.05);
+  color: var(--danger, #d92d20);
+  font-size: 12.5px;
+}
+
+.profit-error button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .rate-row {

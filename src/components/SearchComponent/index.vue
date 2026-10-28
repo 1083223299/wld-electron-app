@@ -10,7 +10,7 @@ const props = defineProps({
   // 栅格间隔
   gutter: { type: Number, default: 20 },
   // 标签宽度
-  labelWidth: { type: String, default: '82px' },
+  labelWidth: { type: [String, Number], default: '82px' },
   // 是否显示重置按钮
   showReset: { type: Boolean, default: true },
   // 是否在重置前二次确认
@@ -28,6 +28,9 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['search', 'reset']);
+const normalizedLabelWidth = computed(() => (
+  typeof props.labelWidth === 'number' ? `${props.labelWidth}px` : props.labelWidth
+));
 
 // default-time 在 element-plus 2.14+ 要求 Date 对象数组，传字符串数组会导致 dayjs 解析失败、面板显示 NaN
 const DEFAULT_TIME = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)];
@@ -259,7 +262,7 @@ defineExpose({
       class="search-form"
       :model="formData"
       :inline="true"
-      :label-width="labelWidth"
+      :label-width="normalizedLabelWidth"
       label-position="left"
       @submit.prevent
     >

@@ -59,15 +59,7 @@ export const playerApi = {
     request.put(`/api/admin/players/${playerId}/specs`, { specs }),
 };
 
-// =====================================================================
-// 打手入驻审核（独立菜单「打手审核」，原型：未来洞电竞后台 > 用户管理 > 打手审核）
-// 【接口待后端确认】以下路径/字段为按原型拟定，OpenAPI 未给出，联调时以后端实际为准：
-//   列表 GET  /api/admin/player-applications
-//        Query: page/pageSize/name(模糊)/phone(完全匹配)/status(PENDING 审核中 / REJECTED 已驳回)/appliedFrom/appliedTo
-//   通过 POST /api/admin/player-applications/{id}/approve  body: { specs }（维护可接单规格，结构同打手规格）
-//   驳回 POST /api/admin/player-applications/{id}/reject    body: { reason }（驳回原因，≤200字）
-// 列表行拟定字段：{ id, name, phone, clubName, status, lastRejectReason, appliedAt }
-// =====================================================================
+// 打手入驻审核；通过时提交已选择的游戏规格 ID，驳回原因最多 200 字。
 export const playerApplicationApi = {
   /** 入驻审核列表（服务端分页/筛选）@param {object} params */
   list: (params = {}) => {
@@ -77,14 +69,14 @@ export const playerApplicationApi = {
       qs.set(key, Array.isArray(value) ? value.join(',') : String(value));
     });
     const query = qs.toString();
-    return request.get(`/api/admin/player-applications${query ? `?${query}` : ''}`);
+    return request.get(`/api/admin/mp-player-applies${query ? `?${query}` : ''}`);
   },
 
-  /** 审核通过：需维护可接单规格 @param {number} id @param {object} payload { specs } */
-  approve: (id, payload = {}) =>
-    request.post(`/api/admin/player-applications/${id}/approve`, payload),
+  /** 审核通过：specIds 为可接单游戏规格 ID 数组。 */
+  approve: (id, specIds) =>
+    request.post(`/api/admin/mp-player-applies/${id}/approve`, { specIds }),
 
-  /** 审核驳回：需维护驳回原因 @param {number} id @param {object} payload { reason } */
-  reject: (id, payload = {}) =>
-    request.post(`/api/admin/player-applications/${id}/reject`, payload),
+  /** 审核驳回：rejectReason 最多 200 字。 */
+  reject: (id, rejectReason) =>
+    request.post(`/api/admin/mp-player-applies/${id}/reject`, { rejectReason }),
 };

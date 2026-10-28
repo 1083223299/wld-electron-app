@@ -4,6 +4,7 @@ import { useToast } from '../../../composables/useToast';
 import { TYPE_OPTIONS, slotSourceText, orderApi } from '../../../api/modules/order';
 import { fileApi } from '../../../api/modules/file';
 import { CLIENT_OPTIONS, STATUS_CLASS } from './mockData';
+import OrderLogTimeline from './OrderLogTimeline.vue';
 
 /**
  * 订单编辑弹窗内容（接口联调 + 原型 UI 恢复，依据最新 OpenAPI 2026-10-21）
@@ -37,6 +38,9 @@ const specOptions = computed(() => {
 
 const isProgress = computed(() => props.row.status === '进行中');
 const isDelta = computed(() => props.row.gameName === '三角洲行动');
+const isCustomOrder = computed(
+  () => props.row.hideGameSpec || props.row.orderModeCode === 'CUSTOM' || props.row.orderMode === '用户自定义下单'
+);
 const hasProof = computed(() => ['进行中', '已完成', '交易关闭'].includes(props.row.status));
 
 /* ===== 分润信息（POST /api/admin/orders/{id}/profit-details；未接单/未锁定时不展示数值） ===== */
@@ -221,8 +225,8 @@ function removeDeposit(index) {
 }
 
 function submit() {
-  if (!form.gameId) return show('请选择游戏名称', 'warning');
-  if (!form.specId) return show('请选择游戏规格', 'warning');
+  if (!isCustomOrder.value && !form.gameId) return show('请选择游戏名称', 'warning');
+  if (!isCustomOrder.value && !form.specId) return show('请选择游戏规格', 'warning');
   // 金额：不传保持原值；已退款订单不能改（前端禁用输入兜底）
   let amount;
   if (!isRefunded.value && String(form.amount).trim() !== '') {
@@ -232,8 +236,8 @@ function submit() {
   }
   // 提交维护接口支持的字段；存单（hold）/凭证等后端已返回、但 maintain 接口不携带，故不提交
   emit('save', {
-    gameId: Number(form.gameId),
-    specId: Number(form.specId),
+    ...(form.gameId !== '' && form.gameId != null ? { gameId: Number(form.gameId) } : {}),
+    ...(form.specId !== '' && form.specId != null ? { specId: Number(form.specId) } : {}),
     clients: form.clients.length ? form.clients.join(',') : '',
     orderType: form.orderType,
     playerCount: Number(form.playerCount) || 0,
@@ -267,7 +271,9 @@ defineExpose({ submit });
           <label>订单号</label>
           <div class="copy-field">
             <span class="readonly">{{ row.orderNo }}</span>
-            <button type="button" class="copy-btn" @click="copyText(row.orderNo)">复制</button>
+            <button type="button" class="copy-btn" aria-label="复制订单号" title="复制" @click="copyText(row.orderNo)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+            </button>
           </div>
         </div>
         <div class="form-row">
@@ -275,10 +281,12 @@ defineExpose({ submit });
           <div class="copy-field">
             <span class="readonly">{{ row.thirdOrderNo }}</span>
             <span v-if="row.channel" class="channel-tag">{{ row.channel }}</span>
-            <button type="button" class="copy-btn" @click="copyText(row.thirdOrderNo)">复制</button>
+            <button type="button" class="copy-btn" aria-label="复制第三方订单号" title="复制" @click="copyText(row.thirdOrderNo)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+            </button>
           </div>
         </div>
-        <div class="form-row">
+        <div v-if="!isCustomOrder" class="form-row">
           <label>游戏名称</label>
           <el-select v-model="form.gameId" placeholder="请选择游戏" style="width: 100%" @change="form.specId = ''">
             <el-option v-for="item in gameOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -296,10 +304,12 @@ defineExpose({ submit });
           <label>角色名</label>
           <div class="copy-field">
             <input v-model="form.roleName" placeholder="请输入角色名" />
-            <button type="button" class="copy-btn" @click="copyText(form.roleName)">复制</button>
+            <button type="button" class="copy-btn" aria-label="复制角色名" title="复制" @click="copyText(form.roleName)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+            </button>
           </div>
         </div>
-        <div class="form-row">
+        <div v-if="!isCustomOrder" class="form-row">
           <label>游戏规格</label>
           <el-select v-model="form.specId" placeholder="请选择规格" style="width: 100%">
             <el-option v-for="item in specOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -320,7 +330,9 @@ defineExpose({ submit });
           <!-- 组队码 teamCode：maintain 已支持（新 OpenAPI），随保存提交 -->
           <div class="copy-field">
             <input v-model="form.teamCode" placeholder="无则不填" />
-            <button type="button" class="copy-btn" @click="copyText(form.teamCode)">复制</button>
+            <button type="button" class="copy-btn" aria-label="复制组队码" title="复制" @click="copyText(form.teamCode)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1" /></svg>
+            </button>
           </div>
         </div>
         <div class="form-row">
@@ -461,14 +473,7 @@ defineExpose({ submit });
     <!-- 订单日志（接口：logs） -->
     <section class="edit-section">
       <h4>订单日志</h4>
-      <ul v-if="logs.length" class="log-list">
-        <li v-for="(log, i) in logs" :key="i">
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-text">{{ log.text }}</span>
-          <span class="log-op">操作人：{{ log.op }}</span>
-        </li>
-      </ul>
-      <p v-else class="muted-text">暂无日志</p>
+      <OrderLogTimeline :logs="logs" />
     </section>
 
     <!-- 完成凭证（coverUrl 首图 / endUrl 尾图 / progressUrls 进程图，接口已返回；只读展示） -->
@@ -717,19 +722,33 @@ defineExpose({ submit });
 
 .copy-btn {
   flex: 0 0 auto;
-  border: 1px solid var(--primary-border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
   border-radius: 6px;
-  padding: 3px 10px;
-  background: var(--primary-soft);
+  padding: 0;
+  background: transparent;
   color: var(--primary);
-  font-size: 12px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
+.copy-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .copy-btn:hover {
-  background: var(--primary);
-  color: var(--text-invert);
+  border-color: var(--primary-border-strong);
+  background: var(--primary-soft);
 }
 
 .kv {
@@ -890,35 +909,6 @@ defineExpose({ submit });
 .player-card strong {
   color: var(--text-main);
   font-size: 13px;
-}
-
-.log-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.log-list li {
-  display: grid;
-  grid-template-columns: 150px 1fr auto;
-  gap: 12px;
-  align-items: baseline;
-  font-size: 12.5px;
-  color: var(--text-sub);
-  padding-left: 12px;
-  border-left: 2px solid var(--border);
-}
-
-.log-time {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-}
-
-.log-op {
-  color: var(--text-faint);
-  font-size: 12px;
 }
 
 .form-tip {

@@ -93,7 +93,7 @@ const filter = reactive({
   auditStatus: '',
   attribute: '', // 主订单/子订单（新 OpenAPI 已支持 attribute=MAIN/SUB）
   orderType: '',
-  orderMode: '', // 下单方式（常规下单/用户自定义下单；枚举待后端确认）
+  orderMode: '', // placeMode：NORMAL / CUSTOM
   claimer: '', // 领取人姓名/企微（新 OpenAPI 已支持 ownerName 模糊，仅 scope=ALL 有效）
   ownerId: '', // 领取人账号ID（接口参数，仅 scope=ALL 有效）
   clientType: '', // 客户端（新 OpenAPI 已支持 clients=PC/MOBILE，原型中文做映射）
@@ -252,6 +252,7 @@ function mapTags(item = {}) {
  * 仍未返回的原型字段（组队码/存单/凭证等）兜底注入，待后端补充接口后自动有数据。
  */
 function mapOrderRow(item = {}) {
+  const placeMode = item.placeMode || item.orderMode || item.placeType || (item.customOrder ? 'CUSTOM' : '');
   return {
     id: item.id,
     orderNo: item.orderNo || '',
@@ -279,9 +280,9 @@ function mapOrderRow(item = {}) {
     createTime: item.createdAt || '',
     orderType: typeText(item.orderType),
     orderTypeCode: item.orderType,
-    /* 下单方式（常规下单/用户自定义下单；字段名待后端确认，兼容 orderMode/placeType/customOrder） */
-    orderModeCode: item.orderMode || item.placeType || (item.customOrder ? 'CUSTOM' : ''),
-    orderMode: (item.orderMode || item.placeType) ? modeText(item.orderMode || item.placeType) : (item.customOrder ? '用户自定义下单' : ''),
+    orderModeCode: placeMode,
+    orderMode: item.placeModeLabel || (placeMode ? modeText(placeMode) : ''),
+    hideGameSpec: Boolean(item.hideGameSpec),
     /* ---- 接口已返回（后端已补齐） ---- */
     roleName: item.roleName || '',
     /* teamCode（组队码）：列表/详情已返回 */
@@ -347,7 +348,7 @@ function buildParams() {
     status: filter.status,
     auditStatus: filter.auditStatus,
     orderType: filter.orderType,
-    orderMode: filter.orderMode,
+    placeMode: filter.orderMode,
     from: fmtDateTime(fromDay),
     to: fmtDateTime(toDay),
   };
@@ -549,8 +550,8 @@ async function saveEdit(form) {
   try {
     // amount：不传保持原金额，已退款订单后端拒绝修改；groupQrUrl：传空串清除，不传保持原值
     await orderApi.maintain(row.id, {
-      gameId: form.gameId,
-      specId: form.specId,
+      ...(form.gameId !== '' && form.gameId != null ? { gameId: form.gameId } : {}),
+      ...(form.specId !== '' && form.specId != null ? { specId: form.specId } : {}),
       clients: form.clients,
       orderType: form.orderType,
       playerCount: form.playerCount,
@@ -1267,7 +1268,7 @@ async function submitAudit({ pass, reason }) {
 
       <template #cell-clientType="{ row }">{{ row.clients ? row.clients.split(/[,，]/).filter(Boolean).join('、') : '—' }}</template>
 
-      <template #cell-spec="{ row }">{{ row.spec || '—' }}</template>
+      <template #cell-spec="{ row }">{{ row.hideGameSpec ? '—' : row.spec || '—' }}</template>
 
       <template #cell-roleName="{ row }">{{ row.roleName || '—' }}</template>
 

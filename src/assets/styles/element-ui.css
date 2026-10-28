@@ -406,12 +406,12 @@
 }
 
 /* 占位文字：EP 组件作用域默认变量会盖掉 :root 映射，这里直接强制定位 */
-.el-input__inner::placeholder,
+/* .el-input__inner::placeholder,
 .el-textarea__inner::placeholder,
 .el-select__placeholder,
 .el-input-number .el-input__inner::placeholder {
   color: var(--input-placeholder) !important;
-}
+} */
 .el-select__placeholder.is-transparent {
   color: var(--input-one-placeholder) !important;;
 }

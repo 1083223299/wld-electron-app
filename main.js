@@ -675,14 +675,29 @@ function notifyBubbleHtml(items) {
 /** 消息跳转目标说明文案（按类型） */
 function jumpLabelFor(item) {
   if (!item) return '查看详情';
+  if (isPlayerApplicationNotice(item)) return '跳转至打手审核';
   if (item.type === 'stuck') return '跳转至订单列表';
   if (item.type === 'handover') return '跳转至交接日志';
   return '查看系统通知';
 }
 
+function isPlayerApplicationNotice(item) {
+  const marker = `${item.scene || ''} ${item.sceneLabel || ''} ${item.title || ''} ${item.content || ''}`;
+  return /PLAYER.*(APPLICATION|APPLY|JOIN)|打手.{0,6}(入驻|申请)|入驻申请/i.test(marker);
+}
+
 /** 消息跳转路由（按类型） */
 function jumpPathFor(item) {
   if (!item) return '/notify';
+  if (isPlayerApplicationNotice(item)) {
+    const query = new URLSearchParams();
+    if (item.applicationId || item.bizKey) query.set('applicationId', item.applicationId || item.bizKey);
+    if (item.playerId) query.set('playerId', item.playerId);
+    if (item.playerName) query.set('name', item.playerName);
+    if (item.phone) query.set('phone', item.phone);
+    const suffix = query.toString();
+    return `/users/player-audit${suffix ? `?${suffix}` : ''}`;
+  }
   if (item.type === 'stuck') return '/orders/manage?tab=order';
   if (item.type === 'handover') return '/handover/log';
   return '/notify';
@@ -753,7 +768,20 @@ function openNotifyPage(path = '/notify') {
 
 /* ================= 未读列表缓存（常驻冒泡小窗数据源） ================= */
 let trayUnreadItems = []; // 未读列表缓存（渲染进程上报）
+const handledNotifyIds = new Set(); // 防止同一通知因重连/重复 IPC 再次打开弹窗
+const MAX_HANDLED_NOTIFY_IDS = 500;
 let isOnNotifyPage = false; // 渲染进程是否正停在系统通知页（在页时来消息不闪托盘，避免打扰）
+
+function rememberNotifyId(id) {
+  const key = id == null || id === '' ? '' : String(id);
+  if (!key) return true;
+  if (handledNotifyIds.has(key)) return false;
+  handledNotifyIds.add(key);
+  if (handledNotifyIds.size > MAX_HANDLED_NOTIFY_IDS) {
+    handledNotifyIds.delete(handledNotifyIds.values().next().value);
+  }
+  return true;
+}
 
 /** 系统通知相关 IPC：托盘整体闪动 + 右下角常驻未读列表冒泡 */
 function setupNotifyBridge() {
@@ -765,6 +793,10 @@ function setupNotifyBridge() {
   });
 
   ipcMain.on('notify:incoming', (_event, payload = {}) => {
+    // 托盘未读列表可能已被标记已读并移除；单靠当前列表无法识别之后重放的旧消息。
+    // 按通知 ID 在主进程生命周期内去重，重复事件不能重新闪烁或弹出旧列表。
+    if (!rememberNotifyId(payload.id)) return;
+
     // 是否需要闪托盘：
     // - 不在通知页 → 闪
     // - 在通知页但窗口已最小化/隐藏（人已经不在看）→ 也要闪
@@ -787,6 +819,14 @@ function setupNotifyBridge() {
           content: payload.body || '',
           time: payload.time || new Date().toISOString(),
           mentions: Array.isArray(payload.mentions) ? payload.mentions : [],
+          scene: payload.scene || '',
+          sceneLabel: payload.sceneLabel || '',
+          jumpTarget: payload.jumpTarget || '',
+          bizKey: payload.bizKey || '',
+          applicationId: payload.applicationId || '',
+          playerId: payload.playerId || '',
+          playerName: payload.playerName || '',
+          phone: payload.phone || '',
         },
         ...trayUnreadItems,
       ].slice(0, 50); // 最多保留 50 条，防止长期驻留内存膨胀

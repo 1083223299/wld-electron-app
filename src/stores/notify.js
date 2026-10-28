@@ -71,9 +71,15 @@ function normalize(raw) {
     // 展示用相对时间（后端 timeText）；无则回落到本地格式化
     time: src.timeText || src.time || src.createdAt || formatTime(),
     sceneLabel: src.sceneLabel || '',
+    scene: src.scene || '',
+    bizKey: src.bizKey || '',
     orderId: src.orderId || null,
     jumpTarget: src.jumpTarget || '',
-    read: !!src.read,
+    applicationId: src.applicationId || src.playerApplicationId || src.bizKey || '',
+    playerId: src.playerId || src.userId || '',
+    playerName: src.playerName || src.applicantName || src.name || '',
+    phone: src.phone || src.playerPhone || src.applicantPhone || src.mobile || '',
+    read: src.read != null ? !!src.read : Number(src.readFlag) === 1,
   };
 }
 
@@ -175,9 +181,8 @@ export const useNotifyStore = defineStore('notify', {
           onStatus: (status) => {
             this.connected = status === 'connected';
             if (status === 'connected') {
-              // 重连成功：取消兜底轮询，并立即校准一次角标（补断连期间错过的推送）
+              // 在线时角标由 NOTIFICATION / UNREAD 推送更新，不额外轮询接口。
               this.cancelUnreadPolling();
-              this.refreshUnreadOnce();
               // 离线/断线期间的新消息补提醒：托盘闪动 + 声音 + 托盘冒泡弹窗
               this.remindOfflineUnread();
             } else {
@@ -274,6 +279,8 @@ export const useNotifyStore = defineStore('notify', {
      */
     async remindOfflineUnread() {
       if (!useUserStore().token) return;
+      if (this._remindingOfflineUnread) return;
+      this._remindingOfflineUnread = true;
       try {
         const userStore = useUserStore();
         // 账号标识：优先 user 对象（me 接口已返回时），否则从 token JWT 解 loginId，保证切账号各自独立
@@ -286,21 +293,24 @@ export const useNotifyStore = defineStore('notify', {
         const since = Number((this.lastRemindTsByUser || {})[uid]) || 0;
 
         const res = await notifyApi.list({ page: 1, pageSize: 50 });
-        const { list } = normalizeNotificationPage(res);
+        const { list, unread, badge } = normalizeNotificationPage(res);
+        const existingIds = new Set(this.items.map((item) => String(item.id)));
         const fresh = (Array.isArray(list) ? list : []).filter((item) => {
           if (item.readFlag !== 0) return false;
+          if (existingIds.has(String(item.id))) return false;
           const t = item.createdAt ? new Date(String(item.createdAt).replace(/-/g, '/')).getTime() : 0;
           return t > since;
         });
+        const fetchedItems = list.map(normalize).filter(Boolean);
+        const fetchedIds = new Set(fetchedItems.map((item) => String(item.id)));
+        const liveItems = this.items.filter((item) => !fetchedIds.has(String(item.id)));
+        this.items = [...fetchedItems, ...liveItems].slice(0, MAX_ITEMS);
+        this.applyBadge(unread, badge);
 
+        let hasNewUnread = false;
         if (fresh.length && window.notifyBridge) {
           fresh.forEach((item) => {
-            // 先同步进渲染进程列表（未读、置顶），保证后续托盘未读列表（以渲染进程为权威）包含这些消息，
-            // 不会被同步覆盖掉；同时保留后端权威字段
-            const norm = normalize(item);
-            if (norm) {
-              this.items = [norm, ...this.items].slice(0, MAX_ITEMS);
-            }
+            hasNewUnread = true;
             if (window.notifyBridge.notifyIncoming) {
               window.notifyBridge.notifyIncoming({
                 id: item.id,
@@ -309,16 +319,26 @@ export const useNotifyStore = defineStore('notify', {
                 type: 'system',
                 time: item.createdAt || '',
                 mentions: [],
+                scene: item.scene || '',
+                sceneLabel: item.sceneLabel || '',
+                jumpTarget: item.jumpTarget || '',
+                bizKey: item.bizKey || '',
+                applicationId: item.applicationId || item.playerApplicationId || item.bizKey || '',
+                playerId: item.playerId || item.userId || '',
+                playerName: item.playerName || item.applicantName || item.name || '',
+                phone: item.phone || item.playerPhone || item.applicantPhone || item.mobile || '',
               });
             }
           });
           // 微信式提示音（多条只响一声）
-          playNotifySound();
+          if (hasNewUnread) playNotifySound();
         }
         // 记录该账号的检查时间（无论是否有新增，均更新，避免重复提醒）
         this.lastRemindTsByUser = { ...(this.lastRemindTsByUser || {}), [uid]: Date.now() };
       } catch {
         // 检查失败不影响主流程，下次连接/登录再试
+      } finally {
+        this._remindingOfflineUnread = false;
       }
     },
 
@@ -356,7 +376,13 @@ export const useNotifyStore = defineStore('notify', {
      * @param {number|string} badge 角标文本（>99 为 '99+'，未传时由 unread 推导）
      */
     applyBadge(unread, badge) {
-      const n = Number(unread) || 0;
+      const hasUnread = unread != null && unread !== '';
+      const hasBadge = badge != null;
+      if (!hasUnread && !hasBadge) return;
+      const badgeCount = String(badge || '').includes('+')
+        ? Math.max(this.unread, 100)
+        : Number(badge);
+      const n = Math.max(0, Number(hasUnread ? unread : badgeCount) || 0);
       this.unread = n > 0 ? n : 0;
       // 角标归一化：0/'' 一律置空（角标为 0 时不显示），>0 时优先后端给的文本
       this.badge =
@@ -383,6 +409,16 @@ export const useNotifyStore = defineStore('notify', {
       this.syncTrayBadge();
     },
 
+    /** 本地乐观增加角标（新消息推送未携带后端未读数时使用） */
+    incrementBadge(n = 1) {
+      const d = Math.max(0, Number(n) || 0);
+      if (d === 0) return;
+      const next = this.unreadCount + d;
+      this.unread = next;
+      this.badge = next > 99 ? '99+' : String(next);
+      this.syncTrayBadge();
+    },
+
     /**
      * 收到一条新消息：入列 + 未读 + （非静默时）弹气泡 + 通知主进程闪托盘
      * 后端 /ws/notify 推送：NOTIFICATION（新通知）、UNREAD（已读后仅角标）
@@ -406,6 +442,12 @@ export const useNotifyStore = defineStore('notify', {
         this.applyBadge(raw.unread, raw.badge);
       }
 
+      // WebSocket 重连或离线补提醒可能再次返回同一条通知；保留原状态，不重复插入或提醒。
+      if (this.items.some((existing) => String(existing.id) === String(item.id))) {
+        this.syncTrayBadge();
+        return;
+      }
+
       // 卡单预警按订单号去重：同一订单重复提醒时更新原记录
       const isStuck = item.type === NOTIFY_TYPE.STUCK && item.orderNos.length > 0;
       if (isStuck) {
@@ -413,15 +455,20 @@ export const useNotifyStore = defineStore('notify', {
           (i) => i.type === NOTIFY_TYPE.STUCK && i.orderNos[0] === item.orderNos[0]
         );
         if (prev) {
+          const wasRead = prev.read;
           prev.title = item.title;
           prev.content = item.content;
           prev.time = item.time;
           prev.read = false;
+          if (wasRead && raw.badge == null && raw.unread == null) this.incrementBadge();
           if (!opts.silent) this.notifyUser(prev);
           this.syncTrayBadge();
           return;
         }
       }
+
+      // 部分通知推送不带未读数；先本地递增，避免顶部角标只能等进入列表刷新。
+      if (!item.read && raw.badge == null && raw.unread == null) this.incrementBadge();
 
       this.items.unshift(item);
       if (this.items.length > MAX_ITEMS) this.items.splice(MAX_ITEMS);
@@ -462,6 +509,14 @@ export const useNotifyStore = defineStore('notify', {
           type: item.type,
           time: item.time,
           mentions: item.mentions.slice(),
+          scene: item.scene,
+          sceneLabel: item.sceneLabel,
+          jumpTarget: item.jumpTarget,
+          bizKey: item.bizKey,
+          applicationId: item.applicationId,
+          playerId: item.playerId,
+          playerName: item.playerName,
+          phone: item.phone,
         });
       }
     },
@@ -531,6 +586,14 @@ export const useNotifyStore = defineStore('notify', {
             content: i.content && i.content.length > 60 ? `${i.content.slice(0, 60)}…` : i.content,
             time: i.time,
             mentions: Array.isArray(i.mentions) ? i.mentions.slice(0, 5) : [],
+            scene: i.scene || '',
+            sceneLabel: i.sceneLabel || '',
+            jumpTarget: i.jumpTarget || '',
+            bizKey: i.bizKey || '',
+            applicationId: i.applicationId || '',
+            playerId: i.playerId || '',
+            playerName: i.playerName || '',
+            phone: i.phone || '',
           }));
         window.notifyBridge.setTrayList({ count: items.length, items });
       }

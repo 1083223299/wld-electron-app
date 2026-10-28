@@ -1,3 +1,4 @@
+// OrderConfigView 组件，用于管理订单配置，主要是卡单时长配置
 <script setup>
 import { onMounted, ref } from 'vue';
 import { useToast } from '../../../composables/useToast';

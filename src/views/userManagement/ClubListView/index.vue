@@ -681,9 +681,9 @@ const getAssetPlaceholder = computed(() => {
 });
 
 const getAssetReasonLabel = computed(() => {
-  if (assetForm.operation === '充值') return '充值原因（会在C端展示）';
-  if (assetForm.operation === '扣减') return '扣减原因（会在C端展示）';
-  return '抵扣原因（会在C端展示）';
+  if (assetForm.operation === '充值') return '充值原因';
+  if (assetForm.operation === '扣减') return '扣减原因';
+  return '抵扣原因';
 });
 
 // 列表接口返回收益/押金余额：incomeBalance / depositBalance（单位元）
@@ -777,7 +777,7 @@ async function submitAsset() {
       action: WALLET_ACTION_MAP[assetForm.operation],
       amount,
       reason: assetForm.reason.trim(),
-      files: assetForm.files.map((f) => ({ url: f.url, name: f.name })),
+      files: assetForm.files.map((f) => f.url),
     });
     assetModalVisible.value = false;
     show('资产已更新', 'success');

@@ -39,7 +39,7 @@ export const notifyConfig = {
   reconnectMaxMs: 30000,
   idleTimeoutMs: 45000,
   pollDelayMs: 30000,
-  pollIntervalMs: 30000,
+  pollIntervalMs: 60000,
 };
 
 export const environments = {
