@@ -755,13 +755,13 @@ function refreshNotifyBubble() {
 }
 
 /** 拉起主窗口并跳转到系统通知相关页面（跳转后收起冒泡） */
-function openNotifyPage(path = '/notify') {
+function openNotifyPage(path = '/notify', notificationId = null) {
   closeNotifyBubble();
   if (mainWindow) {
     mainWindow.show();
     mainWindow.focus();
     if (!mainWindow.webContents.isDestroyed()) {
-      mainWindow.webContents.send('notify:open-notify', path);
+      mainWindow.webContents.send('notify:open-notify', { path, notificationId });
     }
   }
 }
@@ -842,7 +842,7 @@ function setupNotifyBridge() {
   // 冒泡小窗点击某条「跳转」：拉起主窗口并跳转对应页面
   ipcMain.on('notify:bubble-jump', (_event, id) => {
     const item = trayUnreadItems.find((i) => String(i.id) === String(id));
-    openNotifyPage(item ? jumpPathFor(item) : '/notify');
+    openNotifyPage(item ? jumpPathFor(item) : '/notify', item ? item.id : null);
   });
 
   // 渲染进程主动停止闪烁（窗口聚焦 / 进入系统通知页 / 全部已读）

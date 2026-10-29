@@ -532,6 +532,24 @@ export const useNotifyStore = defineStore('notify', {
       this.syncTrayBadge();
     },
 
+    /** 托盘弹窗跳转时：成功标记单条已读后同步本地角标；失败时保留未读状态。 */
+    async markNotificationRead(id) {
+      const item = this.items.find((entry) => String(entry.id) === String(id));
+      if (!item || item.read) return false;
+      try {
+        await notifyApi.markRead(item.id);
+      } catch {
+        // request.js 已提示接口错误；跳转仍继续，消息保持未读以便之后重试。
+        return false;
+      }
+      item.read = true;
+      this.decrementBadge(1);
+      if (!this.items.some((entry) => !entry.read) && window.notifyBridge?.setTrayList) {
+        window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
+      }
+      return true;
+    },
+
     /** 全部标记已读，并停止托盘闪烁、清除托盘角标、收起冒泡 */
     markAllRead() {
       this.items.forEach((i) => {

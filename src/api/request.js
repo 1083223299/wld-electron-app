@@ -1,10 +1,13 @@
 import { config } from '../config/env';
-import { getToken, removeToken } from '../utils/auth';
+import { getToken, clearAuth } from '../utils/auth';
 import { useToast } from '../composables/useToast';
+import { useConfirm } from '../composables/useConfirm';
 
 // 接口基础地址与超时时间（来自环境配置，默认 8 秒）
 const BASE_URL = config.apibaseURL;
 const TIMEOUT = config.timeout || 8000;
+const AUTH_EXPIRED_MESSAGE = '登录状态已失效';
+let authExpiredPrompt = null;
 
 // 请求/响应拦截器容器：before 为请求拦截器，after 为响应拦截器
 const requestInterceptors = {
@@ -26,6 +29,28 @@ export function addResponseInterceptor(fn) {
 function notifyError(message) {
   const { show } = useToast();
   show(message, 'error');
+}
+
+function promptForReauthentication() {
+  if (!authExpiredPrompt) {
+    const { confirm } = useConfirm();
+    authExpiredPrompt = confirm({
+      title: '登录状态已失效',
+      message: '当前登录状态已失效，是否重新登录？',
+      okText: '立即登录',
+      cancelText: '留在当前页',
+    })
+      .then((shouldLogin) => {
+        if (shouldLogin) {
+          clearAuth();
+          window.location.hash = '#/login';
+        }
+      })
+      .finally(() => {
+        authExpiredPrompt = null;
+      });
+  }
+  return authExpiredPrompt;
 }
 
 /**
@@ -104,10 +129,8 @@ async function http({ url, method = 'GET', data, headers = {} }) {
     // 未带 token 的 401（如登录时账号密码错误）落到下方通用错误分支，直接展示后端返回的 message
     if (res.status === 401) {
       if (requestConfig.headers.Authorization) {
-        removeToken();
-        notifyError('登录已过期，请重新登录');
-        window.location.hash = '#/login';
-        throw new Error('登录已过期');
+        await promptForReauthentication();
+        throw new Error(AUTH_EXPIRED_MESSAGE);
       }
     }
 
@@ -133,9 +156,9 @@ async function http({ url, method = 'GET', data, headers = {} }) {
 
     return result;
   } catch (error) {
-    // 统一错误提示；"登录已过期"已在上方提示过，这里不再重复弹出
+    // 登录失效由确认框处理，这里不再重复弹出错误提示。
     const message = error?.message || '请求失败';
-    if (message !== '登录已过期') {
+    if (message !== AUTH_EXPIRED_MESSAGE) {
       notifyError(message);
     }
     throw error;

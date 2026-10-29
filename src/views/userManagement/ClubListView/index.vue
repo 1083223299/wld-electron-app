@@ -367,6 +367,10 @@ function specOptionsOf(gameId) {
   return game ? game.specs : [];
 }
 
+function specSelectValue(row) {
+  return row.mode === 'all' ? 'all' : String(row.specId ?? '');
+}
+
 function onSpecGameChange(row) {
   row.mode = 'all';
   row.specId = null;
@@ -1137,7 +1141,7 @@ onMounted(fetchList);
                 <option :value="null" disabled>选择游戏</option>
                 <option v-for="g in specCatalog" :key="g.gameId" :value="g.gameId">{{ g.gameName }}</option>
               </select>
-              <select class="spec-value-select" :value="row.mode" @change="onSpecSelect(row, $event)">
+              <select class="spec-value-select" :value="specSelectValue(row)" @change="onSpecSelect(row, $event)">
                 <option value="all">全部</option>
                 <option v-for="s in specOptionsOf(row.gameId)" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
               </select>

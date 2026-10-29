@@ -50,7 +50,7 @@ export const environments = {
     websocketURL: 'ws://localhost:3001',
     // 后台弹框通道（本地模拟环境不启用）
     adminWSURL: '',
-    timeout: 8000,
+    timeout: 50000,
     useMock: true,
   },
 
@@ -61,7 +61,7 @@ export const environments = {
     websocketURL: 'wss://dev-ws.myapp.com',
     // 后台弹框通道（/ws/admin：直连本机网关，无 /wld-dj 前缀）
     adminWSURL: 'ws://127.0.0.1:18080/ws/admin',
-    timeout: 8000,
+    timeout: 50000,
     useMock: false,
   },
 
@@ -73,7 +73,7 @@ export const environments = {
     websocketURL: 'ws://sys.test.weilaidong.com/wld-dj/ws/notify',
     // 后台弹框通道（/ws/admin：同一套握手只换路径；收到纯文本「标题:内容」弹系统气泡/托盘）
     adminWSURL: 'ws://sys.test.weilaidong.com/wld-dj/ws/admin',
-    timeout: 10000,
+    timeout: 50000,
     useMock: false,
   },
 
@@ -84,7 +84,7 @@ export const environments = {
     websocketURL: 'wss://stage-ws.myapp.com',
     // 后台弹框通道（当前与测试环境同网关，路径换 /ws/admin）
     adminWSURL: 'ws://sys.test.weilaidong.com/wld-dj/ws/admin',
-    timeout: 10000,
+    timeout: 50000,
     useMock: false,
   },
 
@@ -95,7 +95,7 @@ export const environments = {
     websocketURL: 'wss://ws.myapp.com',
     // 后台弹框通道：生产尚未有可对外的 WebSocket 域名（后端明确先空着，勿用 api.weilaidong.com）
     adminWSURL: '',
-    timeout: 15000,
+    timeout: 50000,
     useMock: false,
   },
 };

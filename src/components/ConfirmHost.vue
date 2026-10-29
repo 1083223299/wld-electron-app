@@ -18,7 +18,7 @@ function done(val) {
   >
     <p>{{ confirmState.message }}</p>
     <template #footer>
-      <button class="btn btn-plain" @click="done(false)">取消</button>
+      <button class="btn btn-plain" @click="done(false)">{{ confirmState.cancelText }}</button>
       <button class="btn btn-primary" @click="done(true)">{{ confirmState.okText }}</button>
     </template>
   </AppModal>

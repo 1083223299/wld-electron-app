@@ -62,6 +62,30 @@ const { show } = useToast();
 const userStore = useUserStore();
 
 const money = (value) => (Number(value) || 0).toFixed(2);
+const orderTotalAmount = (row) => {
+  const toCents = (value) => {
+    const amount = Number(value);
+    return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+  };
+  return (toCents(row.amount) + toCents(row.platformAdjust) + toCents(row.clubAdjust)) / 100;
+};
+
+async function copyText(text) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(String(text));
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = String(text);
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+  show('已复制', 'success');
+}
 
 /** 当前登录角色（客服 service / 审核员 audit / 管理员 admin） */
 const userRole = computed(() => userStore.role || 'admin');
@@ -246,6 +270,17 @@ function mapTags(item = {}) {
   return Array.from(tags);
 }
 
+function mapTagLabels(item = {}, tags = mapTags(item)) {
+  const labelsByTag = new Map();
+  const tagLabels = Array.isArray(item.tagLabels) ? item.tagLabels : [];
+  (Array.isArray(item.tags) ? item.tags : []).forEach((tag, index) => {
+    const normalizedTag = TAG_TEXT[tag] || tag;
+    const label = tagLabels[index];
+    labelsByTag.set(normalizedTag, typeof label === 'string' && label.trim() ? label : normalizedTag);
+  });
+  return tags.map((tag) => labelsByTag.get(tag) || tag);
+}
+
 /**
  * 后端列表字段 → 页面展示字段。
  * 接口已返回：parentOrderId（主子单列）、tags、createdAt 等；
@@ -253,6 +288,7 @@ function mapTags(item = {}) {
  */
 function mapOrderRow(item = {}) {
   const placeMode = item.placeMode || item.orderMode || item.placeType || (item.customOrder ? 'CUSTOM' : '');
+  const tags = mapTags(item);
   return {
     id: item.id,
     orderNo: item.orderNo || '',
@@ -260,6 +296,8 @@ function mapOrderRow(item = {}) {
     channel: channelDisplayName(item.channelCode),
     channelCode: item.channelCode,
     amount: Number(item.amount) || 0,
+    platformAdjust: item.platformAdjust,
+    clubAdjust: item.clubAdjust,
     product: item.itemName || '',
     gameName: item.gameName || gameNameOf(item.gameId), // 详情接口直接返回游戏名；列表无则目录反查
     gameId: item.gameId,
@@ -274,7 +312,8 @@ function mapOrderRow(item = {}) {
     claimerName: item.ownerName || '',
     claimerCorp: item.ownerWecomName || '',
     ownerAccountId: item.ownerAccountId,
-    tags: mapTags(item),
+    tags,
+    tagLabels: mapTagLabels(item, tags),
     frozen: Number(item.frozen) === 1,
     afterSale: Number(item.afterSaleFlag) === 1,
     createTime: item.createdAt || '',
@@ -408,7 +447,6 @@ onMounted(async () => {
 
 /* ===== 表格列（依据原型列顺序：本平台订单号/第三方订单号/订单金额（元）/购买项目/游戏名称/客户端/游戏规格/角色名/订单状态/审核状态/订单属性/领取人/创建时间/操作；标签并入订单状态列） ===== */
 const columns = [
-  { key: 'orderType', title: '订单类型' },
   { key: 'orderNo', title: '本平台订单号' },
   { key: 'thirdOrderNo', title: '第三方订单号' },
   { key: 'amount', title: '订单金额（元）' },
@@ -1237,7 +1275,7 @@ async function submitAudit({ pass, reason }) {
     >
       <template #toolbar>
         <div class="toolbar-left">
-          <div class="scope-switch">
+          <div v-if="scopeOptions.length > 1" class="scope-switch">
             <button
               v-for="item in scopeOptions"
               :key="item.value"
@@ -1252,15 +1290,56 @@ async function submitAudit({ pass, reason }) {
         <button class="add-btn" @click="openAdd">新增</button>
       </template>
 
-      <template #cell-orderType="{ row }">
-        <span :class="['order-type-tag', { 'is-special': row.orderType === '特惠单' }]">{{ row.orderType || '—' }}</span>
-      </template>
-
       <template #cell-orderNo="{ row }">
-        <span class="order-no-cell">{{ row.orderNo }}</span>
+        <span class="order-no-cell">
+          <span :class="['order-type-tag', { 'is-special': row.orderType === '特惠单' }]">
+            {{ row.orderType === '特惠单' ? '特惠' : '常规' }}
+          </span>
+          <span>{{ row.orderNo || '—' }}</span>
+          <button
+            v-if="row.orderNo"
+            class="order-copy-btn"
+            type="button"
+            :aria-label="`复制本平台订单号 ${row.orderNo}`"
+            title="复制本平台订单号"
+            @click="copyText(row.orderNo)"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5.25" y="2.25" width="8.5" height="10.5" rx="1.5" />
+              <path d="M10.75 13.75H3.5A1.25 1.25 0 0 1 2.25 12.5V5.25" />
+            </svg>
+          </button>
+        </span>
       </template>
 
-      <template #cell-amount="{ row }">{{ money(row.amount) }}</template>
+      <template #cell-thirdOrderNo="{ row }">
+        <span class="order-no-cell">
+          <span
+            v-if="row.channelCode"
+            class="channel-tag order-channel-tag"
+            :title="row.channel"
+            aria-hidden="true"
+          >
+            {{ channelDisplayName(row.channelCode).slice(0, 1) }}
+          </span>
+          <span>{{ row.thirdOrderNo || '—' }}</span>
+          <button
+            v-if="row.thirdOrderNo"
+            class="order-copy-btn"
+            type="button"
+            :aria-label="`复制第三方订单号 ${row.thirdOrderNo}`"
+            title="复制第三方订单号"
+            @click="copyText(row.thirdOrderNo)"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5.25" y="2.25" width="8.5" height="10.5" rx="1.5" />
+              <path d="M10.75 13.75H3.5A1.25 1.25 0 0 1 2.25 12.5V5.25" />
+            </svg>
+          </button>
+        </span>
+      </template>
+
+      <template #cell-amount="{ row }">{{ money(orderTotalAmount(row)) }}</template>
 
       <template #cell-product="{ row }">{{ row.product || '—' }}</template>
 
@@ -1275,7 +1354,7 @@ async function submitAudit({ pass, reason }) {
       <template #cell-status="{ row }">
         <div class="status-wrap">
           <span class="status-badge" :class="STATUS_CLASS[row.status] || 'status-info'">{{ displayStatus(row) }}</span>
-          <span v-for="tag in row.tags" :key="tag" class="order-tag" :class="`tag-${tagClass(tag)}`">{{ tag }}</span>
+          <span v-for="(tag, index) in row.tags" :key="tag" class="order-tag" :class="`tag-${tagClass(tag)}`">{{ row.tagLabels[index] || tag }}</span>
         </div>
       </template>
 
@@ -1736,7 +1815,48 @@ async function submitAudit({ pass, reason }) {
 .order-no-cell {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.order-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.order-copy-btn:hover {
+  background: var(--primary-faint);
+}
+
+.order-copy-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.order-channel-tag {
+  min-width: 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-sub);
+  font-size: 11px;
 }
 
 .special-tag {
@@ -1749,7 +1869,7 @@ async function submitAudit({ pass, reason }) {
   line-height: 1.4;
 }
 
-/* 订单类型列 */
+/* 订单类型标记显示在本平台订单号前 */
 .order-type-tag {
   display: inline-block;
   padding: 2px 8px;

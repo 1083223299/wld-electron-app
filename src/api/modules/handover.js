@@ -5,6 +5,7 @@ import { request } from '../request';
  * 依据 Apifox「未来洞电竞后台 / 交接中心 / 交接日志」OpenAPI 规格：
  * - GET  /api/admin/handovers            交接日志列表（服务端分页 + from/to/status/mine 筛选）
  * - POST /api/admin/handovers            新建交接日志
+ * - GET  /api/admin/handovers/orders/resolve  按平台订单号或内部 ID 校验订单
  * - POST /api/admin/handovers/{id}/ack   关注人标记已处理
  * - GET  /api/admin/accounts             关注人候选（账号列表）
  * 鉴权：Header Authorization: Bearer {token}，request.js 已自动附加当前登录 token
@@ -45,6 +46,10 @@ export const handoverApi = {
    */
   list: (params = {}) => request.get(`/api/admin/handovers${buildQuery(params)}`),
 
+  /** 校验平台订单号或内部订单 ID（含待领取订单） */
+  resolveOrder: (orderNo) =>
+    request.get(`/api/admin/handovers/orders/resolve${buildQuery({ orderNo })}`),
+
   /**
    * 关注人标记已处理 POST /api/admin/handovers/{id}/ack
    * 当前用户由 token 识别，无需 body
@@ -57,7 +62,8 @@ export const handoverApi = {
    * 新建交接日志 POST /api/admin/handovers
    * @param {Object} data
    * @param {string} data.content 交接内容（必填）
-   * @param {number} [data.orderId] 关联订单 ID
+   * @param {string} [data.orderNo] 关联平台订单号
+   * @param {number} [data.orderId] 关联内部订单 ID
    * @param {number[]} [data.watcherIds] 关注人 ID 列表
    * @returns {Promise<Object>} 新建后的交接日志（字段同列表项）
    */

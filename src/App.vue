@@ -48,8 +48,12 @@ onMounted(() => {
 
   // 主进程拉起系统通知相关页面（点击托盘悬停未读列表条目 / 冒泡小窗跳转时触发）
   if (window.notifyBridge && window.notifyBridge.onOpenNotify) {
-    offOpenNotify = window.notifyBridge.onOpenNotify((path) => {
-      router.push(path || '/notify');
+    offOpenNotify = window.notifyBridge.onOpenNotify((payload) => {
+      const target = typeof payload === 'string' ? { path: payload } : payload || {};
+      router.push(target.path || '/notify');
+      if (target.notificationId != null) {
+        notifyStore.markNotificationRead(target.notificationId);
+      }
     });
   }
 

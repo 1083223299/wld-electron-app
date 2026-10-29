@@ -11,7 +11,8 @@ import PaginationSimple from '../../../components/PaginationSimple/index.vue';
  * 交接中心 > 交接日志（已联调真实接口）
  * - GET  /api/admin/handovers            列表（服务端分页 + from/to/status/mine 筛选）
  * - POST /api/admin/handovers/{id}/ack   关注人标记已处理（token 识别当前用户）
- * - POST /api/admin/handovers            新建（content 必填，orderId 可选，watcherIds 关注人）
+ * - GET  /api/admin/handovers/orders/resolve  校验平台订单号或内部 ID
+ * - POST /api/admin/handovers            新建（content 必填，orderNo/orderId 可选，watcherIds 关注人）
  * - GET  /api/admin/accounts             关注人候选
  * - 列表项 myWatcherStatus：当前登录人作为关注人时的 PENDING/DONE，非关注人为 null
  */
@@ -160,11 +161,12 @@ async function handleMarkDone(item) {
 
 /* ================= 新增弹窗 ================= */
 const createVisible = ref(false);
+const createSubmitting = ref(false);
 const createForm = reactive({
   content: '',
   watcherIds: [],
   watchAll: false,
-  orderId: '',
+  orderNo: '',
 });
 
 // 关注人候选（账号列表）
@@ -187,7 +189,7 @@ function openCreate() {
   createForm.content = '';
   createForm.watcherIds = [];
   createForm.watchAll = false;
-  createForm.orderId = '';
+  createForm.orderNo = '';
   createVisible.value = true;
 }
 
@@ -199,6 +201,7 @@ function toggleWatchAll() {
 }
 
 async function submitCreate() {
+  if (createSubmitting.value) return;
   if (!createForm.content.trim()) {
     show('请输入交接内容', 'error');
     return;
@@ -207,18 +210,31 @@ async function submitCreate() {
   if (createForm.watcherIds.length) {
     payload.watcherIds = createForm.watcherIds;
   }
-  if (createForm.orderId) {
-    const orderId = Number(createForm.orderId);
-    if (!Number.isInteger(orderId)) {
-      show('请输入正确的订单号', 'error');
-      return;
+  const orderNo = createForm.orderNo.trim();
+  createSubmitting.value = true;
+  try {
+    if (orderNo) {
+      await handoverApi.resolveOrder(orderNo);
+      if (/^\d+$/.test(orderNo)) {
+        const orderId = Number(orderNo);
+        if (!Number.isSafeInteger(orderId)) {
+          show('内部订单 ID 超出可安全处理的范围，请输入平台订单号', 'error');
+          return;
+        }
+        payload.orderId = orderId;
+      } else {
+        payload.orderNo = orderNo;
+      }
     }
-    payload.orderId = orderId;
+    await handoverApi.create(payload);
+    createVisible.value = false;
+    show('新增成功', 'success');
+    loadList();
+  } catch {
+    // 接口错误由 request.js 统一提示。
+  } finally {
+    createSubmitting.value = false;
   }
-  await handoverApi.create(payload);
-  createVisible.value = false;
-  show('新增成功', 'success');
-  loadList();
 }
 
 /* ================= 处理日志弹窗 ================= */
@@ -286,7 +302,7 @@ onMounted(() => {
 
         <div class="card-field">
           <span class="field-label">关联订单：</span>
-          <span v-if="item.orderId" class="order-tag">{{ item.orderId }}</span>
+          <span v-if="item.orderNo || item.orderId" class="order-tag">{{ item.orderNo || item.orderId }}</span>
           <span v-else class="field-empty">无</span>
         </div>
 
@@ -396,15 +412,15 @@ onMounted(() => {
             <h4>关联订单</h4>
           </div>
           <el-input
-            v-model="createForm.orderId"
-            placeholder="请输入订单号（数字）"
+            v-model="createForm.orderNo"
+            placeholder="请输入平台订单号或内部订单ID"
             clearable
           />
         </div>
       </div>
       <template #footer>
         <button class="btn btn-plain" type="button" @click="createVisible = false">取消</button>
-        <button class="btn btn-primary" type="button" @click="submitCreate">确定</button>
+        <button class="btn btn-primary" type="button" :disabled="createSubmitting" @click="submitCreate">{{ createSubmitting ? '提交中…' : '确定' }}</button>
       </template>
     </AppModal>
 
